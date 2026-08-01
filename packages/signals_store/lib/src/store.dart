@@ -46,6 +46,17 @@ mixin ReactiveStore {
   @visibleForTesting
   static void resetCache() => _cachesByType.clear();
 
+  /// Тестовый доступ к сигналу по символу поля.
+  ///
+  /// Возвращает сигнал, привязанный к полю [field], или `null`, если поле
+  /// ещё ни разу не записывалось. Предназначен для проверок внутреннего
+  /// состояния сигналов (например, отладочного имени) в тестах.
+  @visibleForTesting
+  Signal<dynamic>? signalFor(Symbol field) {
+    final key = _keyOf(field);
+    return _signals[key];
+  }
+
   /// Освобождает все сигналы и очищает внутреннее состояние.
   ///
   /// После вызова любое обращение к полям стора бросает [StateError].
@@ -99,9 +110,11 @@ mixin ReactiveStore {
 
       // Создаём сигнал сразу с реальным значением, чтобы избежать
       // промежуточного null-состояния (см. P7).
+      // Имя для отладки: нормализованная строка ('count'), а не
+      // 'Symbol("count")' — чище в DevTools и логах.
       final signal = _signals[key] ??= Signal<dynamic>(
         newValue,
-        options: SignalOptions(name: key.toString()),
+        options: SignalOptions(name: _symbolToString(key)),
       );
 
       signal.value = newValue; // Обновляем значение сигнала
@@ -171,6 +184,37 @@ mixin ReactiveStore {
       throw StateError('Не удалось найти конец имени в Symbol.toString(): "$s"');
     }
     return Symbol(s.substring(nameStart, end));
+  }
+
+  /// Возвращает нормализованное строковое имя для Symbol (без обёртки
+  /// 'Symbol(...)' и кавычек). Используется для отладочного имени сигнала.
+  String _symbolToString(Symbol symbol) {
+    final normalized = _keyOf(symbol).toString();
+    // normalized имеет вид 'Symbol("count")' (VM) или 'Symbol(count)' (dart2js).
+    // Повторно используем логику _normalize для извлечения чистого имени,
+    // но возвращаем String, а не Symbol.
+    return _extractName(normalized);
+  }
+
+  /// Извлекает чистое имя из 'Symbol("count")' / 'Symbol(count)'.
+  //
+  // NOTE: дублирует логику [_normalize] (DRY). Рефакторинг намеренно отложен
+  // (YAGNI; обе функции короткие и stable) — см. task-5-brief, примечание DRY.
+  String _extractName(String symbolToString) {
+    final openParen = symbolToString.indexOf('(');
+    if (openParen < 0) return symbolToString;
+    final contentStart = openParen + 1;
+    final hasQuote =
+        contentStart < symbolToString.length && symbolToString[contentStart] == '"';
+    final nameStart = contentStart + (hasQuote ? 1 : 0);
+    if (nameStart >= symbolToString.length) return symbolToString;
+
+    final closingQuote = symbolToString.lastIndexOf('"');
+    final end = closingQuote >= nameStart
+        ? closingQuote
+        : symbolToString.lastIndexOf(')');
+    if (end < nameStart) return symbolToString;
+    return symbolToString.substring(nameStart, end);
   }
 }
 

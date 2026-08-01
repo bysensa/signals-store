@@ -65,6 +65,20 @@ void main() {
       );
     });
   });
+
+  // Имя сигнала в DevTools: чистая строка ('field'), а не
+  // 'Symbol("field")'. Проверяется через @visibleForTesting геттер signalFor,
+  // т.к. внутренний _signals приватный.
+  group('signal debug name', () {
+    test('Signal.name uses clean field name, not Symbol(...) toString', () {
+      final store = _NameStore()..field = 1;
+
+      final signal = store.signalFor(#field);
+      expect(signal, isNotNull);
+      // НЕ 'Symbol("field")' — нормализованная строка.
+      expect(signal!.name, equals('field'));
+    });
+  });
 }
 
 // --- Fixtures: real abstract fields (не Invocation.setter) ---
@@ -101,3 +115,11 @@ abstract class _StoreBImpl {
 }
 
 class _StoreB extends _StoreBImpl with ReactiveStore {}
+
+// --- Fixtures для группы 'signal debug name' ---
+
+abstract class _NameImpl {
+  abstract int field;
+}
+
+class _NameStore extends _NameImpl with ReactiveStore {}
