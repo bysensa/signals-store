@@ -1,3 +1,4 @@
+import 'package:meta/meta.dart';
 import 'package:signals/signals.dart';
 
 /// Signals based solution
@@ -33,6 +34,17 @@ mixin ReactiveStore {
   /// поля объекта (O(1)), выполняется при каждом noSuchMethod; на фоне
   /// остальной работы это пренебрежимо мало.
   Map<Symbol, Symbol> get _keyCache => _cachesByType[runtimeType] ??= {};
+
+  /// Очищает глобальный кэш нормализации символов [_cachesByType].
+  ///
+  /// Предназначен для тестовой изоляции: без сброса кэш накапливает записи
+  /// от предыдущих тестов, что маскирует регрессии в нормализации символов.
+  /// Также полезен для сброса роста кэша при интенсивном Flutter hot-reload
+  /// в дев-сессиях (каждый reload регистрирует новый `Type`).
+  ///
+  /// Идемпотентен: безопасен к вызову на пустом кэше.
+  @visibleForTesting
+  static void resetCache() => _cachesByType.clear();
 
   /// Освобождает все сигналы и очищает внутреннее состояние.
   ///
