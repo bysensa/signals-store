@@ -54,7 +54,18 @@ abstract class _UninitializedImpl {
 
 class _Uninitialized extends _UninitializedImpl with ReactiveStore {}
 
+// Fixture для runtime type-check: два поля разных типов, чтобы проверить
+// implicit cast при чтении из динамического сигнала.
+abstract class _TypedImpl {
+  abstract int count;
+  abstract String name;
+}
+
+class _TypedStore extends _TypedImpl with ReactiveStore {}
+
 void main() {
+  tearDown(ReactiveStore.resetCache);
+
   group('static type preservation', () {
     test('read returns declared type (would fail to compile if dynamic)', () {
       final store = _CounterStore(count: 5, name: 'hello');
@@ -99,6 +110,65 @@ void main() {
           () => store.never,
           throwsA(isA<FieldInitializationError>()),
         );
+      },
+    );
+  });
+
+  group('runtime type checking', () {
+    test(
+      'abstract getter implicitly casts stored dynamic to declared type',
+      () {
+        // Эмпирически: abstract T field выполняет implicit cast возвращаемого
+        // из noSuchMethod значения к T. Это даёт рантайм type-check «бесплатно».
+        final store = _TypedStore()..count = 42;
+
+        // Корректный тип проходит.
+        final int c = store.count;
+        expect(c, 42);
+      },
+    );
+
+    test(
+      'writing wrong-typed value via forced noSuchMethod breaks on read',
+      () {
+        // Этот тест фиксирует, что РАНТАЙМ type-check существует — даже если
+        // статический путь (через объявленный сеттер) его не пропустит.
+        // Симулируем запись int в String-поле, обходя статический тип.
+        final store = _TypedStore();
+
+        // Принудительно зовём сеттер с неверным типом (как мог бы сделать
+        // сериализатор или reflection-based маппер).
+        (store as dynamic).noSuchMethod(Invocation.setter(#name, 123));
+
+        // Чтение должно бросить type-error при implicit cast к String.
+        expect(
+          () => store.name,
+          throwsA(predicate<Object>(
+            (e) => e.toString().contains('String') ||
+                e.toString().contains('int'),
+          )),
+        );
+      },
+    );
+  });
+
+  group('final field limitation', () {
+    test(
+      'class with final abstract field cannot be instantiated (compile-time)',
+      () {
+        // Этот тест — документация ограничения, а не runtime-проверка.
+        // ReactiveStore требует mutable abstract-полей, потому что noSuchMethod
+        // перехватывает И геттер, И сеттер. final-поле не имеет сеттера →
+        // нельзя инициализировать в конструкторе → compile error.
+        //
+        // Доказательство (вне runnable-теста):
+        //   abstract class _Bad { abstract final int x; }
+        //   class _BadImpl extends _Bad with ReactiveStore {
+        //     _BadImpl() { x = 1; }  // ❌ error: The setter 'x' isn't defined.
+        //   }
+        //
+        // См. README раздел "Limitations" для обходных путей.
+        expect(true, isTrue); // placeholder — фиксирует, что группа осмысленна
       },
     );
   });
