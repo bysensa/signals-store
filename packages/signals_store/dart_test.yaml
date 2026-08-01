@@ -7,11 +7,6 @@
 platforms:
   - vm
 
-# Применить ко всем тестам в директории test/ (исключая smoke/, который
-# запускается отдельным скриптом).
-#
-# Исключения: smoke/ содержит probe для dart compile js, не test suite.
-on_platform:
-  chrome:
-    # На chrome явно пропускаем smoke-директорию (она не для test runner).
-    undefined_test: ignore
+# smoke/ исключается из раннера естественным образом: dart2js_smoke.dart —
+# это dart compile js probe (без top-level test() вызовов), запускаемый через
+# scripts/dart2js_smoke.sh. См. packages/signals_store/test/smoke/dart2js_smoke.dart.
