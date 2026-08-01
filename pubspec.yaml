@@ -7,3 +7,4 @@ workspace:
   - packages/signals_store_annotation
   - packages/signals_store
   - packages/signals_store_generator
+  - packages/signals_store_example

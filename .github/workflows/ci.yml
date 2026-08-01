@@ -20,8 +20,11 @@ jobs:
           channel: stable
       - run: flutter --version
       - run: flutter pub get
-      - name: Analyze signals_store
-        run: dart analyze packages/signals_store
+      - name: Analyze all packages
+        run: |
+          dart analyze packages/signals_store_annotation
+          dart analyze packages/signals_store
+          dart analyze packages/signals_store_generator
 
   vm-tests:
     runs-on: ubuntu-latest
@@ -33,6 +36,34 @@ jobs:
       - run: flutter pub get
       - name: Run VM tests
         run: flutter test packages/signals_store/test/
+
+  generator-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - name: Run generator tests
+        run: flutter test packages/signals_store_generator/test/
+
+  codegen-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - name: Run codegen via build_runner
+        # Генерирует lib/stores.g.dart из @Store-аннотаций.
+        working-directory: packages/signals_store_example
+        run: flutter pub run build_runner build
+      - name: Analyze generated code
+        run: dart analyze packages/signals_store_example
+      - name: Run example runtime tests
+        run: flutter test packages/signals_store_example/test/
 
   dart2js-smoke:
     runs-on: ubuntu-latest

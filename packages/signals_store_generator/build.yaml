@@ -1,0 +1,8 @@
+builders:
+  store_generator:
+    import: "package:signals_store_generator/signals_store_generator.dart"
+    builder_factories: ["storeBuilder"]
+    build_extensions: {".dart": [".store_generator.g.part"]}
+    auto_apply: dependents
+    build_to: cache
+    applies_builders: ["source_gen|combining_builder"]
