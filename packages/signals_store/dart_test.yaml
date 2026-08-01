@@ -1,0 +1,17 @@
+# Конфигурация тестового раннера для signals_store.
+#
+# platforms: по умолчанию только VM. Для dart2js-покрытия добавьте `chrome`
+# и убедитесь, что Chrome установлен (CI инсталлирует его автоматически).
+# Локально без Chrome используйте scripts/dart2js_smoke.sh как легковесную
+# альтернативу.
+platforms:
+  - vm
+
+# Применить ко всем тестам в директории test/ (исключая smoke/, который
+# запускается отдельным скриптом).
+#
+# Исключения: smoke/ содержит probe для dart compile js, не test suite.
+on_platform:
+  chrome:
+    # На chrome явно пропускаем smoke-директорию (она не для test runner).
+    undefined_test: ignore
