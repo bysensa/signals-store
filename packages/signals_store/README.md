@@ -14,14 +14,12 @@ dependencies:
 
 ## Быстрый старт
 
-`ReactiveStore` реализован в `lib/src/store.dart`. Публичный barrel
-(`package:signals_store/signals_store.dart`) на данный момент реэкспортирует
-только аннотации, поэтому `ReactiveStore` импортируется напрямую из `src/`
-(так же, как это делают тесты пакета). `effect` поставляется пакетом `signals`.
+`ReactiveStore` поставляется публичным barrel-файлом пакета, `effect` —
+пакетом `signals`.
 
 ```dart
-import 'package:signals_store/src/store.dart'; // ReactiveStore
-import 'package:signals/signals.dart';          // effect
+import 'package:signals_store/signals_store.dart'; // ReactiveStore
+import 'package:signals/signals.dart';             // effect
 
 abstract class _CounterImpl {
   abstract int count;

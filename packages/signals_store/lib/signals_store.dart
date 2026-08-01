@@ -2,3 +2,4 @@
 library;
 
 export 'package:signals_store_annotation/signals_store_annotation.dart';
+export 'src/store.dart';
