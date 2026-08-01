@@ -1,7 +1,15 @@
 name: signals_store
-description: A reactive signals store.
+description: >-
+  Reactive store on the signals package. Turns abstract fields into reactive
+  Signal-backed properties via noSuchMethod interception — with full static
+  typing and no boilerplate.
 version: 0.1.0
-publish_to: none
+repository: https://github.com/bysensa/signals-store
+issue_tracker: https://github.com/bysensa/signals-store/issues
+topics:
+  - signals
+  - state-management
+  - reactive
 
 environment:
   sdk: ^3.12.0
@@ -12,8 +20,9 @@ resolution: workspace
 dependencies:
   meta: ^1.18.0
   signals: ^7.0.0
-  signals_store_annotation:
-    path: ../signals_store_annotation
+  # Workspace auto-resolves this to the local package during development;
+  # when published, it points to the hosted version on pub.dev.
+  signals_store_annotation: ^0.1.0
 
 dev_dependencies:
   lints: ^5.0.0
