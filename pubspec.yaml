@@ -1,0 +1,9 @@
+name: signals_store_workspace
+
+environment:
+  sdk: ^3.12.0
+
+workspace:
+  - packages/signals_store_annotation
+  - packages/signals_store
+  - packages/signals_store_generator
