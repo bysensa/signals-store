@@ -1,3 +1,30 @@
+## 0.4.0
+
+- **Computed getters**: a concrete getter (a getter with a body) in a `@Store`
+  class whose body references reactive state now becomes a `Computed`-backed
+  derived value. For each reactive getter `x`, the generator emits:
+  - `late final Computed<T> x$ = computed(() => xRaw, options: ...)` — the
+    memoized, reactive signal (lazy, glitch-free).
+  - `@override T get x => x$.value;` — the reactive accessor consumers read.
+  - `@override T get xRaw => super.x;` — the raw recompute (escape-hatch for
+    getters with non-reactive dependencies).
+- **Reactivity detector** (new `reactivity.dart`): determines which concrete
+  getters are reactive through type analysis, not name lists. A getter is
+  considered reactive if its body references any of: an abstract field, a
+  concrete field whose type is a `@Store` impl (substore), a concrete field
+  whose type is or contains a `Signal` (collections, user classes with Signal
+  fields — deep cascade with cycle protection via `mixin`s and `implements`),
+  another reactive getter/method (transitive fixpoint), or any access to a
+  `Signal`-typed expression (`.value`, `.length`, `[]`, `.where()`, etc. —
+  excluding untracked `.peek()`/`.previousValue` and pure mutations). Verified
+  by 45 detector tests.
+- Non-reactive getters are overridden as trivial `super.x` delegates so the
+  generated class stays concrete.
+- `Computed`/`computed` are resolved from the consumer's existing `signals`
+  import — no new import required.
+- Example `TodoFilterImpl` gains a `hasActiveFilter` computed getter to
+  demonstrate the feature end-to-end.
+
 ## 0.3.0
 
 - **Breaking**: signal fields now inherit the visibility of their source field.
