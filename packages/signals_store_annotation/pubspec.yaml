@@ -2,7 +2,7 @@ name: signals_store_annotation
 description: >-
   Annotations for signals_store code generation. Marks an abstract class as a
   reactive store description and drives the signals_store_generator.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/bysensa/signals-store
 issue_tracker: https://github.com/bysensa/signals-store/issues
 topics:

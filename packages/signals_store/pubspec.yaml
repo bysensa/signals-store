@@ -22,7 +22,7 @@ dependencies:
   signals: ^7.0.0
   # Workspace auto-resolves this to the local package during development;
   # when published, it points to the hosted version on pub.dev.
-  signals_store_annotation: ^0.1.0
+  signals_store_annotation: ^0.2.0
 
 dev_dependencies:
   lints: ^5.0.0

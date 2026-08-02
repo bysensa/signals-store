@@ -1,3 +1,10 @@
+## 0.2.0
+
+- **Abstract stores**: added `abstract` flag to `@Store`
+  (`@Store(name: ..., abstract: true)`). When set, the generator emits an
+  `abstract class` instead of a concrete one — useful for generic base stores
+  whose concrete implementation is written by the consumer.
+
 ## 0.1.0
 
 - Initial version.

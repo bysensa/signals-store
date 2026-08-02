@@ -279,6 +279,106 @@ import 'package:signals/signals.dart';
     // ещё-не-существующее имя реализации.
     expect(generated, isNot(contains('InvalidType')));
   });
+
+  // --- Обобщённые параметры (generics) ---
+
+  test('generic type params are carried over to declaration and extends', () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'BoxStore')
+      abstract class BoxImpl<T> {
+        abstract T value;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Декларация с type param.
+        contains('class BoxStore<T> extends BoxImpl<T>'),
+        // Поле использует параметр типа.
+        contains('Signal<T> _value\$'),
+        contains('required T value'),
+        contains('T get value => _value\$.value;'),
+      ]),
+    );
+  });
+
+  test('multiple generic params with bounds are preserved in declaration', () async {
+    final generated = await _run(
+      packageConfig,
+      '''
+import 'package:signals_store_annotation/signals_store_annotation.dart';
+import 'package:signals/signals.dart';
+
+class Result {}
+''',
+      '''
+      @Store(name: 'GenericStore')
+      abstract class SomeStore<T, R extends Result> {
+        abstract T value;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Bounds сохраняются в декларации наследника.
+        contains('class GenericStore<T, R extends Result>'),
+        // extends конкретизируется теми же параметрами (без bounds).
+        contains('extends SomeStore<T, R>'),
+        contains('Signal<T> _value\$'),
+      ]),
+    );
+  });
+
+  // --- Абстрактные сторы (@Store(abstract: true)) ---
+
+  test('abstract: true emits `abstract class` keyword', () async {
+    final generated = await _run(
+      packageConfig,
+      '''
+import 'package:signals_store_annotation/signals_store_annotation.dart';
+import 'package:signals/signals.dart';
+
+class Result {}
+''',
+      '''
+      @Store(name: 'GenericStore', abstract: true)
+      abstract class SomeStore<T, R extends Result> {
+        abstract T value;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        contains('abstract class GenericStore<T, R extends Result> '
+            'extends SomeStore<T, R>'),
+        contains('Signal<T> _value\$'),
+      ]),
+    );
+    // Не должен эмитить `class` без `abstract`.
+    expect(generated, isNot(contains('\nclass GenericStore')));
+  });
+
+  test('abstract defaults to false (concrete class by default)', () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'ConcreteStore')
+      abstract class SomeImpl {
+        abstract String name;
+      }
+      ''',
+    );
+    // По умолчанию — конкретный класс (без `abstract`).
+    expect(generated, contains('class ConcreteStore extends SomeImpl'));
+    expect(generated, isNot(contains('abstract class ConcreteStore')));
+  });
 }
 
 /// Пустые BuilderOptions для тестов — generator не параметризуется.

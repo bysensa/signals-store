@@ -1,3 +1,16 @@
+## 0.2.0
+
+- **Generic stores**: type parameters of the annotated class
+  (`<T, R extends Result>`) are now carried over to the generated store — with
+  bounds in the class declaration and without bounds in the `extends` clause
+  (`class GenericStore<T, R extends Result> extends SomeStore<T, R>`).
+- **Abstract stores**: `@Store(abstract: true)` produces an `abstract class`
+  instead of a concrete one, enabling generic base stores whose concrete
+  implementation is hand-written by the consumer.
+- Added generator tests for generic type parameters, bounded generics, and the
+  `abstract` flag.
+- Bumps `signals_store_annotation` to `^0.2.0`.
+
 ## 0.1.1
 
 - **Concrete (pass-through) fields**: fields declared with a concrete type

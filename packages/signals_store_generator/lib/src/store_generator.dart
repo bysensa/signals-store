@@ -11,7 +11,7 @@ import 'package:source_gen/source_gen.dart';
 /// Генератор реализаций сторов для аннотации [Store].
 ///
 /// Для каждой аннотации `@Store(name: ...)` на `abstract`-классе генерирует
-/// конкретный класс-наследник. Поля обрабатываются по двум категориям:
+/// класс-наследник. Поля обрабатываются по двум категориям:
 ///
 /// - **`abstract`-поля** → реактивные через `Signal`: приватное поле
 ///   `_<field>$`, типизированные геттер и сеттер, пробрасывающие значение
@@ -20,6 +20,12 @@ import 'package:source_gen/source_gen.dart';
 ///   поля: принимаются параметром конструктора и инициализируются напрямую.
 ///   Используются для вложенных сторов и прочих стабильных ссылок, которые
 ///   НЕ должны быть реактивными на уровне корня.
+///
+/// **Обобщённые параметры и абстрактные сторы.** Type parameters
+/// аннотированного класса (`<T, R extends Result>`) переносятся на
+/// сгенерированный стор: в декларации — с bounds, в `extends` — только имена.
+/// При `@Store(abstract: true)` генерируется `abstract class` — базовый стор,
+/// чью конкретную реализацию пишет пользователь.
 ///
 /// Несколько аннотаций `@Store` на одном классе порождают несколько реализаций.
 /// По умолчанию `GeneratorForAnnotation` видит лишь ПЕРВУЮ аннотацию каждого
@@ -86,6 +92,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     }
 
     final storeName = annotation.read('name').stringValue;
+    // `abstract: true` → генерируем `abstract class` (например, обобщённый
+    // базовый стор, чью конкретную реализацию пишет пользователь). По умолчанию
+    // `false` — конкретный класс.
+    final isAbstract = annotation.peek('abstract')?.boolValue ?? false;
 
     // Дублирующее определение реализации с тем же именем в одной библиотеке
     // дало бы compile error у потребителя — это нормально, лишних проверок не
@@ -104,6 +114,11 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     final plainFields = allFields.where((f) => !f.isAbstract).toList();
 
     final superName = element.name!;
+    // Type parameters класса переносятся на сгенерированный стор: в декларации
+    // — с bounds (`<T, R extends Result>`), в `extends` — только имена
+    // (`<T, R>`), как того требует Dart.
+    final declTypeParams = _typeParamsDeclaration(element);
+    final superTypeArgs = _typeParamNames(element);
     final signalFieldDecls = <String>[];
     final ctorParams = <String>[];
     final ctorInits = <String>[];
@@ -148,6 +163,12 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       ctorParams.add('required super.$fieldName');
     }
 
+    final classKeyword = isAbstract ? 'abstract class' : 'class';
+    final declParams =
+        declTypeParams.isEmpty ? '' : '<${declTypeParams.join(', ')}>';
+    final superArgs =
+        superTypeArgs.isEmpty ? '' : '<${superTypeArgs.join(', ')}>';
+
     final buffer = StringBuffer()
       ..writeln('/// @Store-generated реализация стора «$storeName».')
       ..writeln('///')
@@ -155,7 +176,8 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
         '/// Реактивные (abstract) поля [${element.name}] обёрнуты в [Signal];',
       )
       ..writeln('/// concrete-поля пробрасываются как есть.')
-      ..writeln('class $storeName extends $superName {');
+      ..writeln('$classKeyword $storeName$declParams extends '
+          '$superName$superArgs {');
 
     // Конструктор: super-параметры (concrete) идут как `super.x`,
     // реактивные — с явным инициализатором сигнала.
@@ -191,6 +213,29 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   List<FieldElement> _allFields(ClassElement clazz) {
     return clazz.fields.where((f) => !f.isSynthetic).toList()
       ..sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
+  }
+
+  /// Строковое представление type parameters класса для ДЕКЛАРАЦИИ
+  /// сгенерированного стора — с bounds.
+  ///
+  /// Для `class Foo<T, R extends Result>` возвращает `['T', 'R extends Result']`.
+  /// bounds рендерятся через [DartType.getDisplayString], что сохраняет
+  /// nullable-суффикс и вложенные обобщения.
+  List<String> _typeParamsDeclaration(ClassElement clazz) {
+    return [
+      for (final p in clazz.typeParameters)
+        p.bound == null
+            ? p.name!
+            : '${p.name} extends ${p.bound!.getDisplayString()}',
+    ];
+  }
+
+  /// Имена type parameters класса (без bounds) — для подстановки в `extends`.
+  ///
+  /// Для `class Foo<T, R extends Result>` возвращает `['T', 'R']`: суперкласс
+  /// конкретизируется теми же параметрами, что объявлены у наследника.
+  List<String> _typeParamNames(ClassElement clazz) {
+    return [for (final p in clazz.typeParameters) p.name!];
   }
 
   /// Строковое представление типа поля для кодогенерации.
