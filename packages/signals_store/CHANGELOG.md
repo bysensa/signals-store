@@ -1,3 +1,10 @@
+## 0.2.0
+
+- Bumps `signals_store_annotation` to `^0.2.0` (adds the `abstract` flag used by
+  the code generator). No runtime changes — `ReactiveStore` behavior is
+  unchanged. Existing consumers should also upgrade
+  `signals_store_generator` to `^0.2.0`.
+
 ## 0.1.0
 
 - Initial version.

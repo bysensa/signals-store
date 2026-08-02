@@ -3,7 +3,7 @@ description: >-
   Reactive store on the signals package. Turns abstract fields into reactive
   Signal-backed properties via noSuchMethod interception — with full static
   typing and no boilerplate.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/bysensa/signals-store
 issue_tracker: https://github.com/bysensa/signals-store/issues
 topics:
