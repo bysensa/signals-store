@@ -57,8 +57,9 @@ import 'package:signals/signals.dart';
     );
   });
 
-  test('two @Store annotations → two concrete classes', () async {
-    final generated = await _run(
+  test('multiple @Store annotations on one class → build error, no output asset',
+      () async {
+    final result = await _runResult(
       packageConfig,
       headers,
       '''
@@ -69,16 +70,12 @@ import 'package:signals/signals.dart';
       }
       ''',
     );
+    // На одном классе допускается ровно одна аннотация @Store.
+    expect(result.succeeded, false);
+    expect(result.errors, isNotEmpty);
     expect(
-      generated,
-      allOf([
-        // Первый стор.
-        contains('class FirstSomeStore extends SomeStoreImpl'),
-        contains("name: 'FirstSomeStore.name'"),
-        // Второй стор.
-        contains('class SecondSomeStore extends SomeStoreImpl'),
-        contains("name: 'SecondSomeStore.name'"),
-      ]),
+      result.readerWriter.testing.assets,
+      isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
     );
   });
 
@@ -245,6 +242,83 @@ import 'package:signals/signals.dart';
     );
   });
 
+  // --- Форма конструктора и декларации класса ---
+
+  test('concrete-only class emits constructor without initializer list', () async {
+    // Класс без reactive-полей → конструктор без `:` (нет Signal-инициализаторов).
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'TagsStore')
+      abstract class TagsImpl {
+        final Map<String, int> tags;
+        TagsImpl({required this.tags});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        contains('TagsStore({required super.tags});'),
+        // Конкретный класс без reactive-полей не имеет Signal-полей/override.
+        // (используем `Signal<`, чтобы не матчить упоминание `[Signal]` в doc.)
+        isNot(contains('Signal<')),
+        isNot(contains('@override')),
+      ]),
+    );
+  });
+
+  test('reactive-only class emits constructor with initializer list', () async {
+    // Только reactive-поля → конструктор с инициализатором сигнала, без super.x.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'FilterStore')
+      abstract class FilterImpl {
+        abstract bool active;
+        abstract String? query;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Есть инициализатор сигнала (`: _active$ = ...`).
+        contains('_active\$ = Signal<bool>('),
+        contains('_query\$ = Signal<String?>('),
+        // Нет super-параметров (нет concrete-полей).
+        isNot(contains('super.')),
+      ]),
+    );
+  });
+
+  test('generic abstract store emits abstract keyword with type params', () async {
+    // Комбинация abstract: true + generics — заголовок с `abstract class` и bounds.
+    final generated = await _run(
+      packageConfig,
+      '''
+import 'package:signals_store_annotation/signals_store_annotation.dart';
+import 'package:signals/signals.dart';
+
+class Result {}
+''',
+      '''
+      @Store(name: 'GenericStore', abstract: true)
+      abstract class SomeStore<T, R extends Result> {
+        abstract T value;
+      }
+      ''',
+    );
+    // Точный заголовок из целевого кейса задачи.
+    expect(
+      generated,
+      contains('abstract class GenericStore<T, R extends Result> '
+          'extends SomeStore<T, R>'),
+    );
+  });
+
   // --- Вложенные сторы (impl → implementation rewrite) ---
 
   test('field typed as another @Store impl uses the implementation name', () async {
@@ -278,6 +352,173 @@ import 'package:signals/signals.dart';
     // Генератор НЕ должен эмитить InvalidType для поля, ссылающегося на
     // ещё-не-существующее имя реализации.
     expect(generated, isNot(contains('InvalidType')));
+  });
+
+  test('abstract field typed as another @Store impl uses implementation name', () async {
+    // В отличие от concrete-полей (super.x, тип из суперкласса), reactive-поле
+    // типизированное impl-классом, рендерится с явным типом → rewrite на имя
+    // реализации обязателен.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'InnerStore')
+      abstract class InnerStoreImpl {
+        abstract int value;
+      }
+
+      @Store(name: 'OuterStore')
+      abstract class OuterStoreImpl {
+        abstract InnerStoreImpl inner;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Reactive-поле получает Signal<InnerStore>, а не InnerStoreImpl —
+        // consumer работает с типизированным подстором.
+        contains('Signal<InnerStore> _inner\$'),
+        contains('required InnerStore inner'),
+        contains('InnerStore get inner => _inner\$.value;'),
+      ]),
+    );
+  });
+
+  test('multiple nested substores form a composition tree', () async {
+    // Корневой стор с несколькими подсторами (как AppStore в example):
+    // каждый concrete-поле пробрасывается через super-параметр.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'SessionStore')
+      abstract class SessionStoreImpl {
+        abstract User? currentUser;
+      }
+
+      @Store(name: 'SettingsStore')
+      abstract class SettingsStoreImpl {
+        abstract bool darkMode;
+      }
+
+      @Store(name: 'AppStore')
+      abstract class AppStoreImpl {
+        final SessionStoreImpl session;
+        final SettingsStoreImpl settings;
+        AppStoreImpl({required this.session, required this.settings});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Все три реализации сгенерированы.
+        contains('class SessionStore extends SessionStoreImpl'),
+        contains('class SettingsStore extends SettingsStoreImpl'),
+        contains('class AppStore extends AppStoreImpl'),
+        // Корневой стор пробрасывает оба подстора через super-параметры.
+        contains('required super.session'),
+        contains('required super.settings'),
+        // AppStore не имеет собственных reactive-полей → нет Signal-полей.
+        isNot(contains('Signal<SessionStoreImpl>')),
+      ]),
+    );
+  });
+
+  test('deeply nested store chain (A → B → C) generates all levels', () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'LeafStore')
+      abstract class LeafImpl {
+        abstract int value;
+      }
+
+      @Store(name: 'MiddleStore')
+      abstract class MiddleImpl {
+        final LeafImpl leaf;
+        MiddleImpl({required this.leaf});
+      }
+
+      @Store(name: 'RootStore')
+      abstract class RootImpl {
+        final MiddleImpl middle;
+        RootImpl({required this.middle});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Все уровни дерева сгенерированы.
+        contains('class LeafStore extends LeafImpl'),
+        contains('Signal<int> _value\$'),
+        contains('class MiddleStore extends MiddleImpl'),
+        contains('required super.leaf'),
+        contains('class RootStore extends RootImpl'),
+        contains('required super.middle'),
+      ]),
+    );
+    expect(generated, isNot(contains('InvalidType')));
+  });
+
+  test('concrete field typed as non-store type is NOT rewritten', () async {
+    // Concrete-поле с обычным (не стором) типом рендерится как super.x —
+    // rewrite на impl-имя НЕ должен применяться.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'ConfigStore')
+      abstract class ConfigImpl {
+        final String label;
+        abstract int count;
+        ConfigImpl({required this.label});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Concrete-поле пробрасывается как есть.
+        contains('required super.label'),
+        // Reactive-поле обёрнуто в Signal.
+        contains('Signal<int> _count\$'),
+        // Никакого ложного rewrite.
+        isNot(contains('Signal<String>')),
+      ]),
+    );
+  });
+
+  test('nullable reactive field typed as @Store impl keeps nullable suffix', () async {
+    // Reactive-поле с nullable impl-типом: rewrite `InnerStoreImpl?` → `InnerStore?`.
+    // Проверяет ветку nullabilitySuffix == question в _typeStringFor.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'InnerStore')
+      abstract class InnerStoreImpl {
+        abstract int value;
+      }
+
+      @Store(name: 'OuterStore')
+      abstract class OuterStoreImpl {
+        abstract InnerStoreImpl? maybeInner;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        contains('Signal<InnerStore?> _maybeInner\$'),
+        contains('required InnerStore? maybeInner'),
+        contains('InnerStore? get maybeInner => _maybeInner\$.value;'),
+        contains('set maybeInner(InnerStore? value)'),
+      ]),
+    );
   });
 
   // --- Обобщённые параметры (generics) ---

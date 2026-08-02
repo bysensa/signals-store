@@ -4,6 +4,9 @@
   (`@Store(name: ..., abstract: true)`). When set, the generator emits an
   `abstract class` instead of a concrete one — useful for generic base stores
   whose concrete implementation is written by the consumer.
+- **Breaking**: the generator no longer supports multiple `@Store` annotations
+  on a single class. Each annotated class must carry at most one `@Store`;
+  a second annotation now fails code generation.
 
 ## 0.1.0
 

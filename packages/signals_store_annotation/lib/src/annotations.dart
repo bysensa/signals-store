@@ -5,14 +5,13 @@
 /// `true`, генератор создаст `abstract`-класс — например, обобщённый базовый
 /// стор, чью реализацию (с указанием аргументов типа) пользователь пишет сам.
 ///
-/// Несколько аннотаций `@Store` на одном классе создают несколько реализаций
-/// (по одной на аннотацию):
+/// На одном классе допускается **ровно одна** аннотация `@Store`; несколько
+/// аннотаций вызывают ошибку кодогенерации.
 ///
 /// ```dart
-/// @Store(name: 'FirstSomeStore')
-/// @Store(name: 'SecondSomeStore')
-/// abstract class SomeStoreImpl {
-///   abstract String name;
+/// @Store(name: 'CounterStore')
+/// abstract class CounterImpl {
+///   abstract int count;
 /// }
 /// ```
 ///

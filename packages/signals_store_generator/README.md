@@ -1,12 +1,12 @@
 # signals_store_generator
 
 Генератор кода для [`signals_store_annotation`](../signals_store_annotation).
-Превращает `abstract`-класс, помеченный аннотацией [`@Store`][Store], в один
-или несколько конкретных классов с реактивными (`signals`-бэкенд) полями.
+Превращает `abstract`-класс, помеченный аннотацией [`@Store`][Store], в
+конкретный класс с реактивными (`signals`-бэкенд) полями.
 
 ## Что делает генератор
 
-Для каждой аннотации `@Store(name: ...)` на `abstract`-классе создаётся
+Для аннотации `@Store(name: ...)` на `abstract`-классе создаётся единственный
 класс-наследник. Поля обрабатываются по двум категориям:
 
 - **`abstract`-поля** (реактивные) — заменяются на `Signal`-бэкенд: приватное
@@ -19,32 +19,29 @@
   реактивными на уровне корня.
 
 ```dart
-@Store(name: 'FirstSomeStore')
-@Store(name: 'SecondSomeStore')
-abstract class SomeStoreImpl {
-  abstract String name;
+@Store(name: 'CounterStore')
+abstract class CounterImpl {
+  abstract int count;
 }
 ```
 
 превращается (после `build_runner`) в:
 
 ```dart
-class FirstSomeStore extends SomeStoreImpl {
-  FirstSomeStore({required String name})
-      : _name$ = Signal<String>(
-          name,
-          options: SignalOptions<String>(name: 'FirstSomeStore.name'),
+class CounterStore extends CounterImpl {
+  CounterStore({required int count})
+      : _count$ = Signal<int>(
+          count,
+          options: SignalOptions<int>(name: 'CounterStore.count'),
         );
 
-  final Signal<String> _name$;
+  final Signal<int> _count$;
 
   @override
-  String get name => _name$.value;
+  int get count => _count$.value;
   @override
-  set name(String value) => _name$.value = value;
+  set count(int value) => _count$.value = value;
 }
-
-// ... и аналогично SecondSomeStore
 ```
 
 ## Установка
@@ -64,7 +61,7 @@ dev_dependencies:
 ## Использование
 
 1. Опишите стор как `abstract`-класс с `abstract`-полями и пометьте его
-   аннотацией `@Store` (одной или несколькими):
+   единственной аннотацией `@Store`:
 
    ```dart
    import 'package:signals/signals.dart';
@@ -139,5 +136,8 @@ abstract class AppStoreImpl {
   `@Store применим только к классам`.
 - `@Store` на классе без полей → ошибка: `... не содержит полей. Нечего
   генерировать.`
+- Несколько аннотаций `@Store` на одном классе → ошибка: `... помечен
+  несколькими аннотациями @Store`. Разнесите разные реализации по отдельным
+  классам.
 
 [Store]: ../signals_store_annotation/lib/src/annotations.dart

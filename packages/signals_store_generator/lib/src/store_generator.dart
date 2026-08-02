@@ -27,10 +27,12 @@ import 'package:source_gen/source_gen.dart';
 /// При `@Store(abstract: true)` генерируется `abstract class` — базовый стор,
 /// чью конкретную реализацию пишет пользователь.
 ///
-/// Несколько аннотаций `@Store` на одном классе порождают несколько реализаций.
-/// По умолчанию `GeneratorForAnnotation` видит лишь ПЕРВУЮ аннотацию каждого
-/// типа (`TypeChecker.firstAnnotationOf`), поэтому мы переопределяем [generate]
-/// и обходим ВСЕ аннотации `@Store` у каждого элемента.
+/// На одном классе допускается **ровно одна** аннотация `@Store`; несколько
+/// аннотаций вызывают ошибку кодогенерации. Поэтому `GeneratorForAnnotation`
+/// видит лишь ПЕРВУЮ аннотацию каждого типа (`TypeChecker.firstAnnotationOf`),
+/// но мы переопределяем [generate], чтобы построить карту impl→имя реализации
+/// по всей библиотеке (для типизации вложенных сторов) и явно проверить
+/// отсутствие дублирующих аннотаций.
 /// {@endtemplate}
 class StoreGenerator extends GeneratorForAnnotation<Store> {
   /// {@macro store_generator}
@@ -48,30 +50,37 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // другого стора (`final SessionStoreImpl session;`). Тогда генератор должен
     // использовать имя КОНКРЕТНОЙ реализации (`SessionStore`), чтобы подстор
     // был полноценно типизирован своими реактивными полями.
-    //
-    // Если на impl-классе несколько `@Store`-аннотаций — берём первую
-    // (однозначный выбор по умолчанию).
     final implToStoreName = <String, String>{};
     for (final element in library.allElements) {
       if (element is! ClassElement) continue;
       final annotations = _storeChecker.annotationsOf(element);
       if (annotations.isEmpty) continue;
-      final firstName =
+      implToStoreName[element.name!] =
           ConstantReader(annotations.first).read('name').stringValue;
-      implToStoreName[element.name!] = firstName;
     }
 
     final values = <String>[];
     for (final element in library.allElements) {
-      // Берём все аннотации @Store элемента, а не только первую.
-      for (final annotation in _storeChecker.annotationsOf(element)) {
-        final generated = _generateForAnnotation(
-          element,
-          ConstantReader(annotation),
-          implToStoreName,
+      final annotations = _storeChecker.annotationsOf(element);
+      if (annotations.isEmpty) continue;
+      // На одном классе допускается ровно одна аннотация `@Store` — несколько
+      // реализаций на одном описании запрещены (неоднозначность super-полей и
+      // single-responsibility).
+      if (annotations.length > 1) {
+        final name = element.name;
+        throw InvalidGenerationSource(
+          'Класс «$name» помечен несколькими аннотациями @Store '
+          '(${annotations.length}). Допускается только одна аннотация @Store '
+          'на класс. Разнесите разные реализации по отдельным классам.',
+          element: element,
         );
-        if (generated != null) values.add(generated);
       }
+      final generated = _generateForAnnotation(
+        element,
+        ConstantReader(annotations.single),
+        implToStoreName,
+      );
+      if (generated != null) values.add(generated);
     }
     return values.isEmpty ? '' : values.join('\n\n');
   }
