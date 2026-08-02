@@ -1,5 +1,5 @@
 name: signals_store_example
-description: End-to-end example and smoke test for signals_store_generator.
+description: End-to-end Flutter example demonstrating signals_store architecture.
 publish_to: none
 
 environment:
@@ -9,7 +9,10 @@ environment:
 resolution: workspace
 
 dependencies:
+  flutter:
+    sdk: flutter
   signals: ^7.0.0
+  signals_flutter: ^7.0.0
   signals_store_annotation:
     path: ../signals_store_annotation
   signals_store_generator:
@@ -17,5 +20,12 @@ dependencies:
 
 dev_dependencies:
   build_runner: ^2.4.0
+  flutter_test:
+    sdk: flutter
   lints: ^5.0.0
-  test: ^1.25.0
+
+# Включаем Material Icons font в сборку. Без этого флага все `Icons.*`
+# рендерятся как «вопросик/квадратик» — glyph'ы есть, но сам шрифт
+# (MaterialIcons-Regular.ttf) не попадает в ассеты бандла.
+flutter:
+  uses-material-design: true

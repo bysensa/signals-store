@@ -190,6 +190,95 @@ import 'package:signals/signals.dart';
       isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
     );
   });
+
+  // --- Concrete (pass-through) поля ---
+
+  test('concrete field is passed through as super.param, not Signal-wrapped',
+      () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'Holder')
+      abstract class HolderImpl {
+        final int stable;
+        HolderImpl({required this.stable});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        contains('class Holder extends HolderImpl'),
+        // Concrete-поле пробрасывается через super-параметр.
+        contains('required super.stable'),
+        // И НЕ оборачивается в Signal.
+        isNot(contains('Signal<int>')),
+        isNot(contains('_stable\$')),
+      ]),
+    );
+  });
+
+  test('mixed abstract (reactive) + concrete (pass-through) fields', () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'Mixed')
+      abstract class MixedImpl {
+        final int stable;
+        abstract String reactive;
+        MixedImpl({required this.stable});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Concrete → super-параметр.
+        contains('required super.stable'),
+        // Reactive → Signal + override-аксессоры.
+        contains('Signal<String> _reactive\$'),
+        contains('@override'),
+        contains('String get reactive => _reactive\$.value;'),
+      ]),
+    );
+  });
+
+  // --- Вложенные сторы (impl → implementation rewrite) ---
+
+  test('field typed as another @Store impl uses the implementation name', () async {
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'InnerStore')
+      abstract class InnerStoreImpl {
+        abstract int value;
+      }
+
+      @Store(name: 'OuterStore')
+      abstract class OuterStoreImpl {
+        final InnerStoreImpl inner;
+        OuterStoreImpl({required this.inner});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // OuterStore должен типизировать поле concrete-имя РЕАЛИЗАЦИИ InnerStore,
+        // а не impl-классом InnerStoreImpl.
+        contains('required super.inner'),
+        // InnerStore-реализация сгенерирована с реактивным полем.
+        contains('class InnerStore extends InnerStoreImpl'),
+        contains('Signal<int> _value\$'),
+      ]),
+    );
+    // Генератор НЕ должен эмитить InvalidType для поля, ссылающегося на
+    // ещё-не-существующее имя реализации.
+    expect(generated, isNot(contains('InvalidType')));
+  });
 }
 
 /// Пустые BuilderOptions для тестов — generator не параметризуется.

@@ -7,9 +7,16 @@
 ## Что делает генератор
 
 Для каждой аннотации `@Store(name: ...)` на `abstract`-классе создаётся
-класс-наследник, где каждое `abstract`-поле (геттер + сеттер) заменяется на
-`Signal`-бэкенд: приватное поле `_<field>$`, конструктор с `required`-параметром
-и типизированные геттер/сеттер, пробрасывающие значение в/из сигнала.
+класс-наследник. Поля обрабатываются по двум категориям:
+
+- **`abstract`-поля** (реактивные) — заменяются на `Signal`-бэкенд: приватное
+  поле `_<field>$`, конструктор с `required`-параметром и типизированные
+  геттер/сеттер, пробрасывающие значение в/из сигнала. Чтение/запись
+  автоматически подписывает эффекты (signals).
+- **concrete-поля** (`final X x;` или `X x;`, pass-through) — пробрасываются
+  как `required super.x`-параметр конструктора без `Signal`-обёртки. Это
+  стабильные ссылки (например, вложенные сторы), которые не должны быть
+  реактивными на уровне корня.
 
 ```dart
 @Store(name: 'FirstSomeStore')
@@ -31,7 +38,9 @@ class FirstSomeStore extends SomeStoreImpl {
 
   final Signal<String> _name$;
 
+  @override
   String get name => _name$.value;
+  @override
   set name(String value) => _name$.value = value;
 }
 
@@ -92,11 +101,43 @@ dev_dependencies:
 nullable (`int?`) и дженерики (`List<String>`). Тип сохраняется в сигнале как
 есть — статическая типизация полей сохраняется.
 
+## Вложенные сторы
+
+Для построения глобального дерева состояния (как в [overmind]) один стор может
+содержать другой как concrete-поле, типизированное суперклассом-описанием
+вложенного стора:
+
+```dart
+@Store(name: 'SessionStore')
+abstract class SessionStoreImpl {
+  abstract User? currentUser;
+  abstract bool isLoading;
+}
+
+@Store(name: 'AppStore')
+abstract class AppStoreImpl {
+  // Concrete-поле — стабильно, не реактивно на корне. Его собственные
+  // abstract-поля реактивны через свои сигналы.
+  final SessionStoreImpl session;
+
+  // Реактивное поле — обёрнуто в Signal.
+  abstract bool isBusy;
+
+  AppStoreImpl({required this.session});
+}
+```
+
+Генератор автоматически переписывает тип concrete-поля `SessionStoreImpl` →
+`SessionStore` (имя реализации), чтобы потребитель работал с типизированным
+подстором, чьи поля реактивны.
+
+[overmind]: https://overmindjs.org
+
 ## Поведение при ошибках
 
 - `@Store` на не-классе (например, `const value = 42;`) → ошибка кодогенерации:
   `@Store применим только к классам`.
-- `@Store` на классе без `abstract`-полей → ошибка: `... не содержит
-  abstract-полей. Нечего генерировать.`
+- `@Store` на классе без полей → ошибка: `... не содержит полей. Нечего
+  генерировать.`
 
 [Store]: ../signals_store_annotation/lib/src/annotations.dart
