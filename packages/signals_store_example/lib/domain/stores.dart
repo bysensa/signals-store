@@ -75,6 +75,10 @@ abstract class TodoFilterImpl {
 
   /// Способ сортировки.
   abstract TodoSortBy sortBy;
+
+  /// Активен ли хоть один фильтр (computed — читает reactive-поля).
+  bool get hasActiveFilter =>
+      projectFilterId != null || priorityFilter != null || hideDone;
 }
 
 /// UI-состояние (busy-флаги, snackbar).

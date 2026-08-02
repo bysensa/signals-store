@@ -7,6 +7,8 @@ import 'package:build/build.dart';
 import 'package:signals_store_annotation/signals_store_annotation.dart';
 import 'package:source_gen/source_gen.dart';
 
+import 'reactivity.dart';
+
 /// {@template store_generator}
 /// Генератор реализаций сторов для аннотации [Store].
 ///
@@ -45,7 +47,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   );
 
   @override
-  FutureOr<String> generate(LibraryReader library, BuildStep buildStep) {
+  Future<String> generate(LibraryReader library, BuildStep buildStep) async {
     // Карта: имя impl-класса → имя его @Store-реализации.
     //
     // Нужна для корректной типизации concrete-полей, ссылающихся на суперкласс
@@ -60,6 +62,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       implToStoreName[element.name!] =
           ConstantReader(annotations.first).read('name').stringValue;
     }
+    // implToStoreName.keys — имена классов, помеченных @Store. Передаём в
+    // детектор реактивности как `storeImplNames`: concrete-поле, типизированное
+    // таким impl-классом, реактивно как подстор.
+    final storeImplNames = implToStoreName.keys.toSet();
 
     final values = <String>[];
     for (final element in library.allElements) {
@@ -77,21 +83,23 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
           element: element,
         );
       }
-      final generated = _generateForAnnotation(
+      final generated = await _generateForAnnotation(
         element,
         ConstantReader(annotations.single),
         implToStoreName,
+        storeImplNames,
       );
       if (generated != null) values.add(generated);
     }
     return values.isEmpty ? '' : values.join('\n\n');
   }
 
-  String? _generateForAnnotation(
+  Future<String?> _generateForAnnotation(
     Element element,
     ConstantReader annotation,
     Map<String, String> implToStoreName,
-  ) {
+    Set<String> storeImplNames,
+  ) async {
     // Store применим только к классам.
     if (element is! ClassElement) {
       final name = element.name;
@@ -178,6 +186,56 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       ctorParams.add('required super.$fieldName');
     }
 
+    // Computed-геттеры: concrete getters (с телом), которые ссылаются на
+    // реактивные свойства стора. Детектор (см. reactivity.dart) определяет,
+    // какие из них реактивны; для них генерируется контракт
+    // `sum` (через computed) + `sum$` (Computed-поле) + `sumRaw` (сырой расчёт).
+    final computedFieldDecls = <String>[];
+    final computedGetters = <String>[];
+    final plainGetters = <String>[];
+    final concreteGetters = _concreteGetters(element);
+    if (concreteGetters.isNotEmpty) {
+      final reactiveNames = await computeReactiveGetters(
+        clazz: element,
+        storeImplNames: storeImplNames,
+      );
+      for (final g in concreteGetters) {
+        final getterName = g.name!;
+        final returnType = _typeStringFor(g.returnType, implToStoreName);
+        final computedField = '$getterName\$';
+        final rawGetter = '${getterName}Raw';
+        if (reactiveNames.contains(getterName)) {
+          // Computed-поле создаётся через `late final`: `super.getterName`
+          // недоступно в initializer-list (Dart запрещает `super` там), а в
+          // ленивом инициализаторе `this`/`super` доступны.
+          computedFieldDecls.add(
+            '  late final Computed<$returnType> $computedField = computed('
+            '() => $rawGetter, '
+            "options: ComputedOptions<$returnType>(name: '$storeName."
+            "$getterName'));",
+          );
+          // Реактивный геттер: читает значение computed (мемоизировано).
+          computedGetters.add(
+            '  @override\n  $returnType get $getterName => '
+            '$computedField.value;',
+          );
+          // Сырой расчёт: делегирует в исходную логику суперкласса, без
+          // мемоизации. Escape-hatch для геттеров с не-reactive зависимостями.
+          computedGetters.add(
+            '  @override\n  $returnType get $rawGetter => '
+            'super.$getterName;',
+          );
+        } else {
+          // Не-реактивный getter: переопределяется как тривиальный делегат в
+          // суперкласс (чтобы сгенерированный класс не стал abstract).
+          plainGetters.add(
+            '  @override\n  $returnType get $getterName => '
+            'super.$getterName;',
+          );
+        }
+      }
+    }
+
     final classKeyword = isAbstract ? 'abstract class' : 'class';
     final declParams =
         declTypeParams.isEmpty ? '' : '<${declTypeParams.join(', ')}>';
@@ -213,9 +271,36 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       buffer.writeln(accessors.join('\n'));
     }
 
+    // Computed-поля (late final Computed<T> x$ = computed(...)).
+    if (computedFieldDecls.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln(computedFieldDecls.join('\n'));
+    }
+
+    // Computed-геттеры (x → computed.value, xRaw → super.x) и plain getters
+    // (→ super.x) — переопределения concrete getters суперкласса.
+    if (computedGetters.isNotEmpty || plainGetters.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln([...computedGetters, ...plainGetters].join('\n'));
+    }
+
     buffer.writeln('}');
 
     return buffer.toString();
+  }
+
+  /// Все concrete-геттеры класса (геттеры с телом — не abstract, не static,
+  /// не synthetic).
+  ///
+  /// Это кандидаты на computed: детектор `computeReactiveGetters` определяет,
+  /// какие из них реактивны (ссылаются на reactive-поля/подсторы/signals).
+  /// Реактивные → `Computed`; прочие → тривиально переопределяются как
+  /// `super.x` (чтобы сгенерированный класс не стал abstract).
+  List<GetterElement> _concreteGetters(ClassElement clazz) {
+    return clazz.getters
+        .where((g) => !g.isAbstract && !g.isStatic && !g.isSynthetic)
+        .toList()
+      ..sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
   }
 
   /// Все поля класса-описания: и abstract (реактивные), и concrete
