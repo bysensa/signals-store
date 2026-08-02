@@ -21,7 +21,7 @@ import '../usecases/ui_usecases.dart';
 ///
 /// 1. извлекает параметры из [Intent];
 /// 2. вызывает нужный UseCase, передавая в него стор (через `extension type`)
-///    и внешние зависимости (репозитории) параметрами `invoke`;
+///    и внешние зависимости (репозитории) параметрами `call`;
 /// 3. выполняет UI-сайд-эффекты (навигация, диалоги) через `context`.
 ///
 /// Все actions собираются в `Map<Type, Action<Intent>>` через [buildActions] и
@@ -41,13 +41,13 @@ class LoginAction extends ContextAction<LoginIntent> {
   @override
   Future<Object?> invoke(LoginIntent intent, [BuildContext? context]) async {
     try {
-      await Login(store).invoke(
+      await Login(store)(
         email: intent.email,
         password: intent.password,
         authRepo: repos.auth,
       );
       // После успешного логина — загрузить начальные данные.
-      await LoadInitialData(store).invoke(
+      await LoadInitialData(store)(
         projectsRepo: repos.projects,
         todosRepo: repos.todos,
         tagsRepo: repos.tags,
@@ -68,7 +68,7 @@ class LogoutAction extends ContextAction<LogoutIntent> {
   @override
   Future<Object?> invoke(LogoutIntent intent, [BuildContext? context]) async {
     await repos.auth.logout();
-    Logout(store).invoke();
+    Logout(store)();
     return null;
   }
 }
@@ -103,7 +103,7 @@ class CreateTodoAction extends ContextAction<CreateTodoIntent> {
 
   @override
   Future<Object?> invoke(CreateTodoIntent intent, [BuildContext? context]) async {
-    await CreateTodo(store).invoke(
+    await CreateTodo(store)(
       title: intent.title,
       projectId: intent.projectId,
       priority: intent.priority,
@@ -111,7 +111,7 @@ class CreateTodoAction extends ContextAction<CreateTodoIntent> {
       tagIds: intent.tagIds,
       todosRepo: repos.todos,
     );
-    ShowSnackbar(store).invoke(message: 'Задача добавлена');
+    ShowSnackbar(store)(message: 'Задача добавлена');
     return null;
   }
 }
@@ -123,7 +123,7 @@ class ToggleTodoAction extends ContextAction<ToggleTodoIntent> {
 
   @override
   Object? invoke(ToggleTodoIntent intent, [BuildContext? context]) {
-    ToggleTodo(store).invoke(todoId: intent.todoId);
+    ToggleTodo(store)(todoId: intent.todoId);
     return null;
   }
 }
@@ -136,11 +136,11 @@ class DeleteTodoAction extends ContextAction<DeleteTodoIntent> {
 
   @override
   Future<Object?> invoke(DeleteTodoIntent intent, [BuildContext? context]) async {
-    await DeleteTodo(store).invoke(
+    await DeleteTodo(store)(
       todoId: intent.todoId,
       todosRepo: repos.todos,
     );
-    ShowSnackbar(store).invoke(message: 'Задача удалена');
+    ShowSnackbar(store)(message: 'Задача удалена');
     return null;
   }
 }
@@ -152,7 +152,7 @@ class OpenProjectAction extends ContextAction<OpenProjectIntent> {
 
   @override
   Object? invoke(OpenProjectIntent intent, [BuildContext? context]) {
-    SelectProject(store).invoke(intent.projectId);
+    SelectProject(store)(intent.projectId);
     return null;
   }
 }
@@ -180,7 +180,7 @@ class SetPriorityFilterAction extends ContextAction<SetPriorityFilterIntent> {
 
   @override
   Object? invoke(SetPriorityFilterIntent intent, [BuildContext? context]) {
-    SetPriorityFilter(store).invoke(intent.priority);
+    SetPriorityFilter(store)(intent.priority);
     return null;
   }
 }
@@ -192,7 +192,7 @@ class ToggleHideDoneAction extends ContextAction<ToggleHideDoneIntent> {
 
   @override
   Object? invoke(ToggleHideDoneIntent intent, [BuildContext? context]) {
-    ToggleHideDone(store).invoke();
+    ToggleHideDone(store)();
     return null;
   }
 }
@@ -204,7 +204,7 @@ class SetSortByAction extends ContextAction<SetSortByIntent> {
 
   @override
   Object? invoke(SetSortByIntent intent, [BuildContext? context]) {
-    SetSortBy(store).invoke(intent.sortBy);
+    SetSortBy(store)(intent.sortBy);
     return null;
   }
 }
@@ -216,7 +216,7 @@ class ResetFilterAction extends ContextAction<ResetFilterIntent> {
 
   @override
   Object? invoke(ResetFilterIntent intent, [BuildContext? context]) {
-    ResetFilter(store).invoke();
+    ResetFilter(store)();
     return null;
   }
 }
@@ -249,12 +249,12 @@ class CreateProjectAction extends ContextAction<CreateProjectIntent> {
     CreateProjectIntent intent, [
     BuildContext? context,
   ]) async {
-    await CreateProject(store).invoke(
+    await CreateProject(store)(
       name: intent.name,
       colorValue: intent.colorValue,
       projectsRepo: repos.projects,
     );
-    ShowSnackbar(store).invoke(message: 'Проект создан');
+    ShowSnackbar(store)(message: 'Проект создан');
     return null;
   }
 }

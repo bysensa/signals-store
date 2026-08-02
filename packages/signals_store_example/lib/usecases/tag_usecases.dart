@@ -3,9 +3,9 @@ import '../domain/stores.dart';
 
 /// UseCase: создать тег.
 ///
-/// Внешняя зависимость ([TagsRepo]) передаётся параметром `invoke`.
+/// Внешняя зависимость ([TagsRepo]) передаётся параметром `call`.
 extension type CreateTag(AppStore state) {
-  Future<void> invoke({
+  Future<void> call({
     required String label,
     required int colorValue,
     required TagsRepo tagsRepo,

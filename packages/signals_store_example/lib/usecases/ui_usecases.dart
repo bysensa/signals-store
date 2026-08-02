@@ -6,14 +6,14 @@ import '../domain/stores.dart';
 /// и показывает SnackBar при появлении значения, после чего вызывает
 /// [ClearSnackbar].
 extension type ShowSnackbar(AppStore state) {
-  void invoke({required String message}) {
+  void call({required String message}) {
     state.ui.snackbarMessage = message;
   }
 }
 
 /// UseCase: очистить сообщение SnackBar (вызывается UI после показа).
 extension type ClearSnackbar(AppStore state) {
-  void invoke() {
+  void call() {
     state.ui.snackbarMessage = null;
   }
 }

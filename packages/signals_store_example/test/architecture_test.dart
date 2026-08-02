@@ -17,7 +17,7 @@ import 'package:signals_store_example/ui/derived.dart';
 /// Проверяют, что слои (сторы без репозиториев, UseCase как extension type
 /// стора, derived-селекторы) работают end-to-end без UI:
 /// - сторы типобезопасны и реактивны (через @Store codegen + MapSignal);
-/// - UseCase мутирует стор, внешние зависимости — параметры invoke;
+/// - UseCase мутирует стор, внешние зависимости — параметры call;
 /// - computed-селекторы пересчитываются при изменении стора.
 AppStore _freshStore() => AppStore(
       session: SessionStore(currentUser: null, isLoading: false, error: null),
@@ -75,14 +75,14 @@ void main() {
   });
 
   group('UseCase: extension type on AppStore', () {
-    test('CreateTodo mutates store via invoke, repo passed as dependency', () async {
+    test('CreateTodo mutates store via call, repo passed as dependency', () async {
       final store = _freshStore();
       // Подготовим проект, к которому привяжем задачу.
       store.projects.projects['p1'] =
           const Project(id: 'p1', name: 'Personal', colorValue: 0xFF000000);
 
       final repos = Repos.defaults();
-      await CreateTodo(store).invoke(
+      await CreateTodo(store)(
         title: 'Test task',
         projectId: 'p1',
         priority: Priority.high,
@@ -105,7 +105,7 @@ void main() {
           const Project(id: 'p1', name: 'P', colorValue: 0xFF000000);
 
       final repos = Repos.defaults();
-      await CreateTodo(store).invoke(
+      await CreateTodo(store)(
         title: 't',
         projectId: 'p1',
         priority: Priority.low,
@@ -115,15 +115,15 @@ void main() {
       );
       final id = store.projects.todos.keys.single;
 
-      ToggleTodo(store).invoke(todoId: id);
+      ToggleTodo(store)(todoId: id);
       expect(store.projects.todos[id]!.isDone, isTrue);
-      ToggleTodo(store).invoke(todoId: id);
+      ToggleTodo(store)(todoId: id);
       expect(store.projects.todos[id]!.isDone, isFalse);
     });
 
     test('SetPriorityFilter mutates ui.filter without dependencies', () {
       final store = _freshStore();
-      SetPriorityFilter(store).invoke(Priority.high);
+      SetPriorityFilter(store)(Priority.high);
       expect(store.ui.filter.priorityFilter, Priority.high);
     });
 
@@ -132,7 +132,7 @@ void main() {
       final store = _freshStore();
       final repos = Repos.defaults();
       await expectLater(
-        Login(store).invoke(
+        Login(store)(
           email: 'nobody@example.com',
           password: 'x',
           authRepo: repos.auth,
@@ -148,7 +148,7 @@ void main() {
     test('LoadInitialData seeds store and derived stats reflect it', () async {
       final store = _freshStore();
       final repos = Repos.defaults();
-      await LoadInitialData(store).invoke(
+      await LoadInitialData(store)(
         projectsRepo: repos.projects,
         todosRepo: repos.todos,
         tagsRepo: repos.tags,
@@ -170,7 +170,7 @@ void main() {
     test('visibleTodos respects hideDone filter and recomputes', () async {
       final store = _freshStore();
       final repos = Repos.defaults();
-      await LoadInitialData(store).invoke(
+      await LoadInitialData(store)(
         projectsRepo: repos.projects,
         todosRepo: repos.todos,
         tagsRepo: repos.tags,
@@ -180,9 +180,9 @@ void main() {
       // После LoadInitialData фильтр по проекту = первый проект (p1 «Личное»),
       // в котором 2 задачи (одна выполнена). Снимем фильтр по проекту, чтобы
       // видеть все 4.
-      SetProjectFilter(store).invoke(null);
+      SetProjectFilter(store)(null);
       final beforeHide = derived.visibleTodos.value.length;
-      ToggleHideDone(store).invoke();
+      ToggleHideDone(store)();
       final afterHide = derived.visibleTodos.value.length;
 
       expect(beforeHide, 4);
@@ -209,7 +209,7 @@ void main() {
       expect(fireCount, 1); // первичное срабатывание.
 
       final repos = Repos.defaults();
-      await CreateTodo(store).invoke(
+      await CreateTodo(store)(
         title: 'reactive task',
         projectId: 'p1',
         priority: Priority.medium,
@@ -220,7 +220,7 @@ void main() {
       expect(fireCount, greaterThan(1), reason: 'CreateTodo должен триггерить');
 
       final id = store.projects.todos.keys.single;
-      await DeleteTodo(store).invoke(todoId: id, todosRepo: repos.todos);
+      await DeleteTodo(store)(todoId: id, todosRepo: repos.todos);
       expect(fireCount, greaterThan(2), reason: 'DeleteTodo должен триггерить');
 
       sub();

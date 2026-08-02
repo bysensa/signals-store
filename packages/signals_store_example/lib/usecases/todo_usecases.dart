@@ -7,9 +7,9 @@ import '../domain/stores.dart';
 
 /// UseCase: создать задачу.
 ///
-/// Внешняя зависимость ([TodosRepo]) передаётся параметром `invoke`.
+/// Внешняя зависимость ([TodosRepo]) передаётся параметром `call`.
 extension type CreateTodo(AppStore state) {
-  Future<void> invoke({
+  Future<void> call({
     required String title,
     required String projectId,
     required Priority priority,
@@ -35,7 +35,7 @@ extension type CreateTodo(AppStore state) {
 /// UseCase: переключить статус выполнения задачи. Чистая мутация стейта, без
 /// внешних зависимостей.
 extension type ToggleTodo(AppStore state) {
-  void invoke({required String todoId}) {
+  void call({required String todoId}) {
     final todo = state.projects.todos[todoId];
     if (todo == null) return;
     // MapSignal-мутация без batch (см. заметку в CreateTodo).
@@ -45,9 +45,9 @@ extension type ToggleTodo(AppStore state) {
 
 /// UseCase: удалить задачу.
 ///
-/// Внешняя зависимость ([TodosRepo]) передаётся параметром `invoke`.
+/// Внешняя зависимость ([TodosRepo]) передаётся параметром `call`.
 extension type DeleteTodo(AppStore state) {
-  Future<void> invoke({required String todoId, required TodosRepo todosRepo}) async {
+  Future<void> call({required String todoId, required TodosRepo todosRepo}) async {
     await todosRepo.remove(todoId);
     // MapSignal-мутация без batch (см. заметку в CreateTodo).
     state.projects.todos.remove(todoId);

@@ -4,9 +4,9 @@ import 'package:signals/signals.dart';
 
 /// UseCase: создать проект.
 ///
-/// Внешняя зависимость ([ProjectsRepo]) передаётся параметром `invoke`.
+/// Внешняя зависимость ([ProjectsRepo]) передаётся параметром `call`.
 extension type CreateProject(AppStore state) {
-  Future<void> invoke({
+  Future<void> call({
     required String name,
     required int colorValue,
     required ProjectsRepo projectsRepo,
@@ -24,7 +24,7 @@ extension type CreateProject(AppStore state) {
 /// UseCase: выбрать активный проект (переключение вкладки/drawer-пункта).
 /// Чистая мутация, без внешних зависимостей.
 extension type SelectProject(AppStore state) {
-  void invoke(String? projectId) {
+  void call(String? projectId) {
     batch(() {
       state.projects.currentProjectId = projectId;
       state.ui.filter.projectFilterId = projectId;

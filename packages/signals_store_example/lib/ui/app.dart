@@ -105,7 +105,7 @@ class _SnackbarHostState extends State<_SnackbarHost> {
                 );
             }
             // Очищаем стор, чтобы то же сообщение можно было показать снова.
-            ClearSnackbar(widget.store).invoke();
+            ClearSnackbar(widget.store)();
           });
         }
         return widget.child;

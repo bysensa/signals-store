@@ -9,35 +9,35 @@ import 'package:signals/signals.dart';
 
 /// UseCase: задать фильтр по проекту. `null` — сбросить.
 extension type SetProjectFilter(AppStore state) {
-  void invoke(String? projectId) {
+  void call(String? projectId) {
     state.ui.filter.projectFilterId = projectId;
   }
 }
 
 /// UseCase: задать фильтр по приоритету. `null` — любой приоритет.
 extension type SetPriorityFilter(AppStore state) {
-  void invoke(Priority? priority) {
+  void call(Priority? priority) {
     state.ui.filter.priorityFilter = priority;
   }
 }
 
 /// UseCase: переключить скрытие выполненных задач.
 extension type ToggleHideDone(AppStore state) {
-  void invoke() {
+  void call() {
     state.ui.filter.hideDone = !state.ui.filter.hideDone;
   }
 }
 
 /// UseCase: задать способ сортировки.
 extension type SetSortBy(AppStore state) {
-  void invoke(TodoSortBy sortBy) {
+  void call(TodoSortBy sortBy) {
     state.ui.filter.sortBy = sortBy;
   }
 }
 
 /// UseCase: сбросить фильтр к значениям по умолчанию.
 extension type ResetFilter(AppStore state) {
-  void invoke() {
+  void call() {
     batch(() {
       state.ui.filter.projectFilterId = state.projects.currentProjectId;
       state.ui.filter.priorityFilter = null;

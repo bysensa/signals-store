@@ -6,9 +6,9 @@ import 'package:signals/signals.dart';
 /// UseCase: загрузить начальные данные (проекты, теги, задачи).
 ///
 /// Оркестрирует три репозитория в одной операции. Все три — внешние зависимости,
-/// передаются параметром `invoke` (в сторах их нет).
+/// передаются параметром `call` (в сторах их нет).
 extension type LoadInitialData(AppStore state) {
-  Future<void> invoke({
+  Future<void> call({
     required ProjectsRepo projectsRepo,
     required TodosRepo todosRepo,
     required TagsRepo tagsRepo,
