@@ -48,10 +48,10 @@ import 'package:signals/signals.dart';
       generated,
       allOf([
         contains('class FirstSomeStore extends SomeStoreImpl'),
-        contains('Signal<String> _name\$'),
+        contains('Signal<String> name\$'),
         contains("name: 'FirstSomeStore.name'"),
-        contains('String get name => _name\$.value;'),
-        contains('set name(String value) => _name\$.value = value;'),
+        contains('String get name => name\$.value;'),
+        contains('set name(String value) => name\$.value = value;'),
         contains('FirstSomeStore({required String name})'),
       ]),
     );
@@ -96,12 +96,12 @@ import 'package:signals/signals.dart';
       allOf([
         contains('class CounterStore extends CounterImpl'),
         // count.
-        contains('Signal<int> _count\$'),
-        contains('int get count => _count\$.value;'),
+        contains('Signal<int> count\$'),
+        contains('int get count => count\$.value;'),
         contains("name: 'CounterStore.count'"),
         // name.
-        contains('Signal<String> _name\$'),
-        contains('String get name => _name\$.value;'),
+        contains('Signal<String> name\$'),
+        contains('String get name => name\$.value;'),
         contains("name: 'CounterStore.name'"),
         // Конструктор с обоими required-параметрами.
         contains('CounterStore({required int count, required String name})'),
@@ -123,10 +123,10 @@ import 'package:signals/signals.dart';
     expect(
       generated,
       allOf([
-        contains('Signal<int?> _maybe\$'),
+        contains('Signal<int?> maybe\$'),
         contains('required int? maybe'),
-        contains('int? get maybe => _maybe\$.value;'),
-        contains('set maybe(int? value) => _maybe\$.value = value;'),
+        contains('int? get maybe => maybe\$.value;'),
+        contains('set maybe(int? value) => maybe\$.value = value;'),
       ]),
     );
   });
@@ -145,7 +145,7 @@ import 'package:signals/signals.dart';
     expect(
       generated,
       allOf([
-        contains('Signal<List<String>> _items\$'),
+        contains('Signal<List<String>> items\$'),
         contains('required List<String> items'),
       ]),
     );
@@ -211,7 +211,7 @@ import 'package:signals/signals.dart';
         contains('required super.stable'),
         // И НЕ оборачивается в Signal.
         isNot(contains('Signal<int>')),
-        isNot(contains('_stable\$')),
+        isNot(contains('stable\$')),
       ]),
     );
   });
@@ -235,9 +235,91 @@ import 'package:signals/signals.dart';
         // Concrete → super-параметр.
         contains('required super.stable'),
         // Reactive → Signal + override-аксессоры.
-        contains('Signal<String> _reactive\$'),
+        contains('Signal<String> reactive\$'),
         contains('@override'),
-        contains('String get reactive => _reactive\$.value;'),
+        contains('String get reactive => reactive\$.value;'),
+      ]),
+    );
+  });
+
+  // --- Область видимости signal-поля (наследуется от исходного поля) ---
+
+  test('public abstract field → public signal field (no underscore prefix)', () async {
+    // Публичное поле `count` → публичное signal-поле `count$` (без `_`).
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'CounterStore')
+      abstract class CounterImpl {
+        abstract int count;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Поле-сигнал публичное — без префикса `_`.
+        contains('final Signal<int> count\$'),
+        contains('count\$ = Signal<int>('),
+        contains('int get count => count\$.value;'),
+        // И НЕ приватное.
+        isNot(contains('_count\$')),
+      ]),
+    );
+  });
+
+  test('private abstract field → private signal field (underscore preserved)', () async {
+    // Приватное поле `_count` → приватное signal-поле `_count$`.
+    // Видимость наследуется от исходного поля.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'CounterStore')
+      abstract class CounterImpl {
+        abstract int _count;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Поле-сигнал приватное — префикс `_` сохранён.
+        contains('final Signal<int> _count\$'),
+        contains('_count\$ = Signal<int>('),
+        contains("name: 'CounterStore._count'"),
+        contains('int get _count => _count\$.value;'),
+        contains('set _count(int value) => _count\$.value = value;'),
+        // Параметр конструктора — приватное имя.
+        contains('required int _count'),
+      ]),
+    );
+  });
+
+  test('mixed public and private fields keep their respective visibility', () async {
+    // Публичное и приватное поля в одном классе: signal-поля наследуют
+    // видимость каждого (public → `name$`, private → `_count$`).
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'MixedStore')
+      abstract class MixedImpl {
+        abstract String name;
+        abstract int _count;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Публичное поле → публичный signal.
+        contains('final Signal<String> name\$'),
+        // Приватное поле → приватный signal.
+        contains('final Signal<int> _count\$'),
+        contains('String get name => name\$.value;'),
+        contains('int get _count => _count\$.value;'),
       ]),
     );
   });
@@ -285,9 +367,9 @@ import 'package:signals/signals.dart';
     expect(
       generated,
       allOf([
-        // Есть инициализатор сигнала (`: _active$ = ...`).
-        contains('_active\$ = Signal<bool>('),
-        contains('_query\$ = Signal<String?>('),
+        // Есть инициализатор сигнала (`: active$ = ...`).
+        contains('active\$ = Signal<bool>('),
+        contains('query\$ = Signal<String?>('),
         // Нет super-параметров (нет concrete-полей).
         isNot(contains('super.')),
       ]),
@@ -346,7 +428,7 @@ class Result {}
         contains('required super.inner'),
         // InnerStore-реализация сгенерирована с реактивным полем.
         contains('class InnerStore extends InnerStoreImpl'),
-        contains('Signal<int> _value\$'),
+        contains('Signal<int> value\$'),
       ]),
     );
     // Генератор НЕ должен эмитить InvalidType для поля, ссылающегося на
@@ -378,9 +460,9 @@ class Result {}
       allOf([
         // Reactive-поле получает Signal<InnerStore>, а не InnerStoreImpl —
         // consumer работает с типизированным подстором.
-        contains('Signal<InnerStore> _inner\$'),
+        contains('Signal<InnerStore> inner\$'),
         contains('required InnerStore inner'),
-        contains('InnerStore get inner => _inner\$.value;'),
+        contains('InnerStore get inner => inner\$.value;'),
       ]),
     );
   });
@@ -454,7 +536,7 @@ class Result {}
       allOf([
         // Все уровни дерева сгенерированы.
         contains('class LeafStore extends LeafImpl'),
-        contains('Signal<int> _value\$'),
+        contains('Signal<int> value\$'),
         contains('class MiddleStore extends MiddleImpl'),
         contains('required super.leaf'),
         contains('class RootStore extends RootImpl'),
@@ -485,7 +567,7 @@ class Result {}
         // Concrete-поле пробрасывается как есть.
         contains('required super.label'),
         // Reactive-поле обёрнуто в Signal.
-        contains('Signal<int> _count\$'),
+        contains('Signal<int> count\$'),
         // Никакого ложного rewrite.
         isNot(contains('Signal<String>')),
       ]),
@@ -513,9 +595,9 @@ class Result {}
     expect(
       generated,
       allOf([
-        contains('Signal<InnerStore?> _maybeInner\$'),
+        contains('Signal<InnerStore?> maybeInner\$'),
         contains('required InnerStore? maybeInner'),
-        contains('InnerStore? get maybeInner => _maybeInner\$.value;'),
+        contains('InnerStore? get maybeInner => maybeInner\$.value;'),
         contains('set maybeInner(InnerStore? value)'),
       ]),
     );
@@ -543,9 +625,9 @@ class Result {}
       generated,
       allOf([
         // Type-аргумент <int> сохранён при rewrite impl → implementation.
-        contains('Signal<Box<int>> _box\$'),
+        contains('Signal<Box<int>> box\$'),
         contains('required Box<int> box'),
-        contains('Box<int> get box => _box\$.value;'),
+        contains('Box<int> get box => box\$.value;'),
         contains('set box(Box<int> value)'),
       ]),
     );
@@ -607,7 +689,7 @@ class Result {}
       generated,
       allOf([
         // count — реактивное поле.
-        contains('Signal<int> _count\$'),
+        contains('Signal<int> count\$'),
         // Конструктор принимает ТОЛЬКО count — без несуществующего super.maxItems.
         contains('ConfigStore({required int count})'),
         isNot(contains('super.maxItems')),
@@ -635,7 +717,7 @@ class Result {}
       generated,
       allOf([
         // count — реактивное поле.
-        contains('Signal<int> _count\$'),
+        contains('Signal<int> count\$'),
         // Конструктор принимает ТОЛЬКО count — без super.label.
         contains('LazyStore({required int count})'),
         isNot(contains('super.label')),
@@ -662,9 +744,9 @@ class Result {}
         // Декларация с type param.
         contains('class BoxStore<T> extends BoxImpl<T>'),
         // Поле использует параметр типа.
-        contains('Signal<T> _value\$'),
+        contains('Signal<T> value\$'),
         contains('required T value'),
-        contains('T get value => _value\$.value;'),
+        contains('T get value => value\$.value;'),
       ]),
     );
   });
@@ -692,7 +774,7 @@ class Result {}
         contains('class GenericStore<T, R extends Result>'),
         // extends конкретизируется теми же параметрами (без bounds).
         contains('extends SomeStore<T, R>'),
-        contains('Signal<T> _value\$'),
+        contains('Signal<T> value\$'),
       ]),
     );
   });
@@ -720,7 +802,7 @@ class Result {}
       allOf([
         contains('abstract class GenericStore<T, R extends Result> '
             'extends SomeStore<T, R>'),
-        contains('Signal<T> _value\$'),
+        contains('Signal<T> value\$'),
       ]),
     );
     // Не должен эмитить `class` без `abstract`.

@@ -1,9 +1,9 @@
 name: signals_store_generator
 description: >-
-  Code generator for signals_store. Turns an abstract class annotated with one
-  or more @Store annotations into concrete subclasses with Signal-backed
-  reactive fields.
-version: 0.2.0
+  Code generator for signals_store. Turns an abstract class annotated with a
+  single @Store annotation into a concrete subclass with Signal-backed reactive
+  fields.
+version: 0.3.0
 repository: https://github.com/bysensa/signals-store
 issue_tracker: https://github.com/bysensa/signals-store/issues
 topics:

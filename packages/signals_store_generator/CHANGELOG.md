@@ -1,3 +1,15 @@
+## 0.3.0
+
+- **Breaking**: signal fields now inherit the visibility of their source field.
+  A public `abstract int count;` produces a public `count$` signal field
+  (previously always `_count$`); a private `abstract int _count;` produces
+  `_count$`. Consumers that referenced the previously-private signal fields by
+  name within the generated library need to update to the new names. Generated
+  getters/setters and the public API surface (the overridden accessors) are
+  unaffected.
+- Added generator tests for visibility preservation across public, private, and
+  mixed-field classes.
+
 ## 0.2.0
 
 - **Generic stores**: type parameters of the annotated class

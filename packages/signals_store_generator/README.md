@@ -9,10 +9,11 @@
 Для аннотации `@Store(name: ...)` на `abstract`-классе создаётся единственный
 класс-наследник. Поля обрабатываются по двум категориям:
 
-- **`abstract`-поля** (реактивные) — заменяются на `Signal`-бэкенд: приватное
-  поле `_<field>$`, конструктор с `required`-параметром и типизированные
-  геттер/сеттер, пробрасывающие значение в/из сигнала. Чтение/запись
-  автоматически подписывает эффекты (signals).
+- **`abstract`-поля** (реактивные) — заменяются на `Signal`-бэкенд: поле
+  `<field>$` с той же областью видимости, что и исходное (публичное поле →
+  `field$`, приватное `_field` → `_field$`), конструктор с `required`-параметром
+  и типизированные геттер/сеттер, пробрасывающие значение в/из сигнала.
+  Чтение/запись автоматически подписывает эффекты (signals).
 - **concrete-поля** (`final X x;` или `X x;`, pass-through) — пробрасываются
   как `required super.x`-параметр конструктора без `Signal`-обёртки. Это
   стабильные ссылки (например, вложенные сторы), которые не должны быть
@@ -30,17 +31,17 @@ abstract class CounterImpl {
 ```dart
 class CounterStore extends CounterImpl {
   CounterStore({required int count})
-      : _count$ = Signal<int>(
+      : count$ = Signal<int>(
           count,
           options: SignalOptions<int>(name: 'CounterStore.count'),
         );
 
-  final Signal<int> _count$;
+  final Signal<int> count$;
 
   @override
-  int get count => _count$.value;
+  int get count => count$.value;
   @override
-  set count(int value) => _count$.value = value;
+  set count(int value) => count$.value = value;
 }
 ```
 
