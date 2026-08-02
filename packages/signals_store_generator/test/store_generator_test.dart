@@ -521,6 +521,128 @@ class Result {}
     );
   });
 
+  test('reactive field typed as generic @Store impl keeps type args', () async {
+    // Reactive-поле типизированное generic-стором: rewrite должен сохранить
+    // type-аргументы (`BoxImpl<int>` → `Box<int>`, а не голый `Box`).
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'Box')
+      abstract class BoxImpl<T> {
+        abstract T value;
+      }
+
+      @Store(name: 'OuterStore')
+      abstract class OuterStoreImpl {
+        abstract BoxImpl<int> box;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Type-аргумент <int> сохранён при rewrite impl → implementation.
+        contains('Signal<Box<int>> _box\$'),
+        contains('required Box<int> box'),
+        contains('Box<int> get box => _box\$.value;'),
+        contains('set box(Box<int> value)'),
+      ]),
+    );
+    expect(generated, isNot(contains('Signal<Box> ')));
+  });
+
+  test('concrete field typed as generic @Store impl is passed via super param', () async {
+    // Concrete-поле типизированное generic-стором: пробрасывается через
+    // super-параметр (тип берётся из объявления суперкласса, rewrite для
+    // concrete-полей не применяется — см. комментарий в _generateForAnnotation).
+    // Generic-стор при этом сохраняет type-параметр в декларации (Box<T>),
+    // а конкретизация (<int>) остаётся в типе concrete-поля суперкласса.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'Box')
+      abstract class BoxImpl<T> {
+        abstract T value;
+      }
+
+      @Store(name: 'OuterStore')
+      abstract class OuterStoreImpl {
+        final BoxImpl<int> box;
+        OuterStoreImpl({required this.box});
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // concrete-поле → super-параметр (без Signal-обёртки).
+        contains('required super.box'),
+        // Generic-стор сохраняет type-параметр в декларации (не конкретизируется).
+        contains('class Box<T> extends BoxImpl<T>'),
+        // Concrete-поле НЕ обёрнуто в Signal.
+        isNot(contains('Signal<BoxImpl<int>>')),
+      ]),
+    );
+  });
+
+  // --- Специальные виды полей: static, late ---
+
+  test('static field in store class is ignored (not a constructor param)', () async {
+    // `static const`-поле — это константа класса, а не состояние экземпляра;
+    // оно НЕ должно попадать в конструктор сгенерированного стора.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'ConfigStore')
+      abstract class ConfigImpl {
+        abstract int count;
+        static const int maxItems = 100;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // count — реактивное поле.
+        contains('Signal<int> _count\$'),
+        // Конструктор принимает ТОЛЬКО count — без несуществующего super.maxItems.
+        contains('ConfigStore({required int count})'),
+        isNot(contains('super.maxItems')),
+        isNot(contains('maxItems')),
+      ]),
+    );
+  });
+
+  test('late field in store class is ignored (not a super param)', () async {
+    // `late`-поле без инициализатора не является ни реактивным (abstract),
+    // ни concrete pass-through — оно инициализируется позже вручную и НЕ должно
+    // становиться super-параметром (у суперкласса нет такого параметра).
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'LazyStore')
+      abstract class LazyImpl {
+        abstract int count;
+        late String label;
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // count — реактивное поле.
+        contains('Signal<int> _count\$'),
+        // Конструктор принимает ТОЛЬКО count — без super.label.
+        contains('LazyStore({required int count})'),
+        isNot(contains('super.label')),
+      ]),
+    );
+  });
+
   // --- Обобщённые параметры (generics) ---
 
   test('generic type params are carried over to declaration and extends', () async {

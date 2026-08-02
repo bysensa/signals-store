@@ -11,8 +11,18 @@
   supported. Each `abstract`-class must carry at most one `@Store`; a second
   annotation now fails code generation with an explicit error. Split different
   implementations across separate classes.
+- **Bugfix**: `static` fields are now ignored — they no longer leak into the
+  generated constructor as spurious `super.x` parameters (`static const max`
+  is class-level metadata, not instance state).
+- **Bugfix**: `late` fields are now ignored — they cannot be `super.x`
+  pass-through parameters (the superclass has no matching constructor
+  parameter) and are not reactive abstract accessors.
+- **Bugfix**: reactive fields typed with a generic store now keep their type
+  arguments during the impl → implementation rewrite
+  (`abstract BoxImpl<int> box;` → `Signal<Box<int>>`, previously `Signal<Box>`).
 - Added generator tests for generic type parameters, bounded generics, the
-  `abstract` flag, and the multiple-annotation error.
+  `abstract` flag, the multiple-annotation error, generic-store-typed fields,
+  and `static`/`late` field handling.
 - Bumps `signals_store_annotation` to `^0.2.0`.
 
 ## 0.1.1

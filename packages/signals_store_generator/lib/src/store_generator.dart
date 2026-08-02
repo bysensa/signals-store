@@ -213,14 +213,23 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   }
 
   /// Все поля класса-описания: и abstract (реактивные), и concrete
-  /// (pass-through), кроме синтетических (унаследованных от Object).
+  /// (pass-through).
   ///
   /// `abstract String name;` даёт [FieldElement] с `isAbstract == true`.
   /// `final SessionStore session;` или `int x;` — concrete.
   ///
+  /// Исключаются поля, не являющиеся состоянием экземпляра стора:
+  /// - синтетические (неявные геттеры/сеттеры, унаследованные от Object);
+  /// - `static`-поля — константы/счётчики уровня класса, а не экземпляра:
+  ///   они не должны становиться параметрами конструктора;
+  /// - `late`-поля — инициализируются вручную позже, у суперкласса нет
+  ///   соответствующего параметра конструктора, поэтому `super.x` невозможен.
+  ///
   /// Сортируем по имени для детерминированного вывода.
   List<FieldElement> _allFields(ClassElement clazz) {
-    return clazz.fields.where((f) => !f.isSynthetic).toList()
+    return clazz.fields
+        .where((f) => !f.isSynthetic && !f.isStatic && !f.isLate)
+        .toList()
       ..sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
   }
 
@@ -255,6 +264,12 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   /// реактивных, так и для concrete-полей: потребитель должен видеть
   /// типизированный подстор.
   ///
+  /// Type-аргументы сохраняются и обрабатываются рекурсивно: для
+  /// `BoxImpl<int>` (где `BoxImpl` — стор) возвращается `Box<int>`; для
+  /// `Map<String, InnerStoreImpl>` внутренний impl-тип тоже rewrite'ится на
+  /// имя реализации. Если type-аргумент сам не является стором, он рендерится
+  /// через `getDisplayString()`.
+  ///
   /// Для всех прочих типов (включая `Map<String, Todo>`, `int?`, импортируемые
   /// классы) возвращает `getDisplayString()` как есть. Суффикс nullable-ности
   /// (`?`) сохраняется.
@@ -264,7 +279,17 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       final storeName = implToStoreName[element.name];
       if (storeName != null) {
         final nullable = type.nullabilitySuffix == NullabilitySuffix.question;
-        return nullable ? '$storeName?' : storeName;
+        // type-аргументы generic-стора (`BoxImpl<int>` → `Box<int>`).
+        // Рекурсивно rewrite'им каждый аргумент, чтобы вложенные impl-типы тоже
+        // получили имя реализации. Для не-generic стора (`InnerStoreImpl`)
+        // typeArguments пуст → возвращаем просто имя (как раньше).
+        final args = type is InterfaceType ? type.typeArguments : const <DartType>[];
+        final base = args.isEmpty
+            ? storeName
+            : '$storeName<${[
+                for (final a in args) _typeStringFor(a, implToStoreName),
+              ].join(', ')}>';
+        return nullable ? '$base?' : base;
       }
     }
     return type.getDisplayString();
