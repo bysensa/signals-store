@@ -1,3 +1,15 @@
+## 0.4.2
+
+- **Bugfix (FP-4)**: a getter reading a concrete pass-through field of a
+  `@Store` substore (e.g. `String get tag => config.label;` where `label` is
+  concrete, not abstract/Signal) is no longer made `Computed`. Previously the
+  detector treated the whole substore as reactive without distinguishing which
+  field was read. Now it checks the specific field: only abstract fields
+  (Signal-backed) or fields with a reactive type count as reactive. Concrete
+  pass-through fields (`String`, `int`, ...) leave the accessing getter plain.
+  Access to abstract substore fields (e.g. `savings.amount`) correctly remains
+  `Computed`. Added a regression test.
+
 ## 0.4.1
 
 - **Bugfix**: reactivity flowing through call arguments is now detected. A
