@@ -110,6 +110,28 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       );
     }
 
+    // --- Валидация C1: именованные конструкторы запрещены ---
+    // Генератор создаёт unnamed-конструктор автоматически, и этого достаточно.
+    // Именованные конструкторы не могут инициализировать abstract-поля
+    // (Signal-поля), поэтому бессмысленны и потенциально сбивают с толку.
+    // Unnamed-конструктор разрешён — он нужен для инициализации concrete-полей
+    // через super.x.
+    final namedCtors = element.constructors
+        .where((c) => !c.isSynthetic && !c.isFactory && c.name != 'new')
+        .toList();
+    if (namedCtors.isNotEmpty) {
+      final names = namedCtors.map((c) => c.name).join(', ');
+      throw InvalidGenerationSource(
+        'Класс «${element.name}» объявляет именованные конструкторы ($names), '
+        'что не поддерживается @Store. Генератор создаёт unnamed-конструктор '
+        'автоматически, и этого достаточно — стор содержит только данные. '
+        'Именованные конструкторы не могут инициализировать abstract-поля '
+        '(Signal-поля). Удалите именованные конструкторы; для инициализации '
+        'concrete-полей используйте unnamed-конструктор.',
+        element: element,
+      );
+    }
+
     final storeName = annotation.read('name').stringValue;
     // `abstract: true` → генерируем `abstract class` (например, обобщённый
     // базовый стор, чью конкретную реализацию пишет пользователь). По умолчанию
@@ -178,8 +200,31 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // super-конструктор). Здесь используем `super.field` — Dart поддерживает
     // initializing-formal/super-параметр, который инициализирует поле
     // суперкласса напрямую.
+    //
+    // --- Валидация C4: super.x требует unnamed-конструктора суперкласса ---
+    // `required super.<field>` валиден, только если у unnamed generative-
+    // конструктора суперкласса есть initializing-formal параметр `this.<field>`.
+    // Без него — compile error у потребителя. Проверяем заранее и бросаем
+    // понятную ошибку вместо битого кода.
+    final superParams = element.unnamedConstructor?.formalParameters
+            .where((p) => p.isInitializingFormal && p.isRequiredNamed)
+            .map((p) => p.name)
+            .whereType<String>()
+            .toSet() ??
+        const <String>{};
     for (final f in plainFields) {
       final fieldName = f.name!;
+      if (!superParams.contains(fieldName)) {
+        throw InvalidGenerationSource(
+          'Concrete-поле «$fieldName» класса «${element.name}» не может быть '
+          'передано через super-конструктор: у суперкласса нет unnamed-'
+          'конструктора с параметром «this.$fieldName». Добавьте unnamed-'
+          'конструктор с initializing-formal параметром (например, '
+          '«${element.name}({required this.$fieldName})»), или сделайте поле '
+          'abstract (реактивным).',
+          element: f,
+        );
+      }
       // super-параметр: `required super.fieldName` пробрасывает значение
       // в поле суперкласса без дополнительной логики. Тип берётся из объявления
       // суперкласса, поэтому impl→implementation-переписывание здесь не нужно.
@@ -194,8 +239,9 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     final computedGetters = <String>[];
     final plainGetters = <String>[];
     final concreteGetters = _concreteGetters(element);
+    var reactiveNames = const <String>{};
     if (concreteGetters.isNotEmpty) {
-      final reactiveNames = await computeReactiveGetters(
+      reactiveNames = await computeReactiveGetters(
         clazz: element,
         storeImplNames: storeImplNames,
       );
@@ -235,6 +281,21 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
         }
       }
     }
+
+    // --- Валидация коллизий генерируемых имён (A2, A3) ---
+    // Генератор создаёт имена из независимых источников: abstract-поле `sum` →
+    // Signal `sum$` + getter/setter `sum`; reactive getter `sum` → Computed
+    // `sum$` + getter `sum` + raw `sumRaw`. Если два источника порождают одно
+    // имя — compile error у потребителя (duplicate field/getter). Детектируем
+    // до эмиссии и бросаем понятную ошибку.
+    _checkNameCollisions(
+      element,
+      storeName,
+      reactiveFields,
+      plainFields,
+      concreteGetters,
+      reactiveNames,
+    );
 
     final classKeyword = isAbstract ? 'abstract class' : 'class';
     final declParams =
@@ -287,6 +348,67 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     buffer.writeln('}');
 
     return buffer.toString();
+  }
+
+  /// Детектирует коллизии генерируемых имён (баги A2, A3).
+  ///
+  /// Генератор создаёт имена из независимых источников:
+  /// - abstract-поле `sum` → Signal `sum$`, getter/setter `sum`;
+  /// - reactive getter `sum` → Computed `sum$`, getter `sum`, raw `sumRaw`;
+  /// - concrete-поле `x` → `super.x` (имя не эмитится, но участвует в контракте).
+  ///
+  /// Если два источника порождают одно имя (например, abstract-поле `sum` и
+  /// getter `sum` оба → `sum$` и `sum`), потребитель получит compile error
+  /// (duplicate field/getter). Детектируем до эмиссии и бросаем понятную ошибку.
+  void _checkNameCollisions(
+    ClassElement element,
+    String storeName,
+    List<FieldElement> reactiveFields,
+    List<FieldElement> plainFields,
+    List<GetterElement> concreteGetters,
+    Set<String> reactiveNames,
+  ) {
+    // Имя → описание источника, который его породил.
+    final nameToSource = <String, String>{};
+
+    void checkName(String name, String source, Element sourceElement) {
+      final existing = nameToSource[name];
+      if (existing != null) {
+        throw InvalidGenerationSource(
+          'Коллизия имён в «$storeName»: $source и $existing создают одно и '
+          'то же имя «$name». Переименуйте одно из них (например, поле или '
+          'геттер), чтобы избежать дублирования в сгенерированном коде.',
+          element: sourceElement,
+        );
+      }
+      nameToSource[name] = source;
+    }
+
+    // Abstract-поля: signal-поле `<name>$` + getter/setter `<name>`.
+    for (final f in reactiveFields) {
+      final fieldName = f.name!;
+      checkName(fieldName, 'abstract-поле «$fieldName» (геттер/сеттер)', f);
+      checkName('$fieldName\$', 'abstract-поле «$fieldName» (Signal-поле)', f);
+    }
+
+    // Concrete-поля: имя участвует в контракте (super.x), но не эмитится как
+    // поле. Всё равно проверяем на коллизию с computed-именами (геттер с тем
+    // же именем породит конфликт override).
+    for (final f in plainFields) {
+      final fieldName = f.name!;
+      checkName(fieldName, 'concrete-поле «$fieldName» (super-параметр)', f);
+    }
+
+    // Concrete-геттеры: getter `<name>`; для reactive — Computed `<name>$` и
+    // raw-геттер `<name>Raw`.
+    for (final g in concreteGetters) {
+      final getterName = g.name!;
+      if (reactiveNames.contains(getterName)) {
+        checkName('$getterName\$', 'computed-геттер «$getterName» (Computed-поле)', g);
+        checkName('${getterName}Raw', 'computed-геттер «$getterName» (raw-геттер)', g);
+      }
+      checkName(getterName, 'геттер «$getterName»', g);
+    }
   }
 
   /// Все concrete-геттеры класса (геттеры с телом — не abstract, не static,

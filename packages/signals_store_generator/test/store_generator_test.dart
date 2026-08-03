@@ -956,6 +956,181 @@ final globalCount = signal(10);
     expect(generated, isNot(contains("computed(")));
     expect(generated, isNot(contains('Raw')));
   });
+
+  // --- АУДИТ неучтённых сценариев генерации ---
+
+  group('audit: unhandled codegen scenarios', () {
+    // C1: класс с ИМЕНОВАННЫМ конструктором → ошибка кодогенерации.
+    test('C1: named constructor in impl → build error', () async {
+      final result = await _runResult(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'NamedStore')
+        abstract class NamedImpl {
+          abstract int a;
+          NamedImpl.main() : a = 0;       // именованный конструктор
+          NamedImpl.named(int v) : a = v; // ещё один именованный
+        }
+        ''',
+      );
+      // Именованные конструкторы запрещены → сборка падает с понятной ошибкой.
+      expect(result.succeeded, false,
+          reason: 'C1: именованные конструкторы должны вызывать ошибку '
+              'кодогенерации');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('именованные конструкторы'),
+          contains('unnamed-конструктор'),
+        ]),
+      );
+      // Битый актив не генерируется.
+      expect(
+        result.readerWriter.testing.assets,
+        isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+      );
+    });
+
+    // C4: класс БЕЗ unnamed-конструктора с concrete-полем → ошибка кодогенерации.
+    test('C4: class without unnamed constructor + concrete field → build error',
+        () async {
+      final result = await _runResult(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'NoCtorStore')
+        abstract class NoCtorImpl {
+          final String label;   // concrete-поле БЕЗ конструктора
+          abstract int count;
+        }
+        ''',
+      );
+      // У суперкласса нет unnamed-конструктора с параметром label → super.label
+      // невалиден → сборка падает с понятной ошибкой.
+      expect(result.succeeded, false,
+          reason: 'C4: concrete-поле без super-конструктора должно вызывать '
+              'ошибку кодогенерации');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('label'),
+          contains('super-конструктор'),
+        ]),
+      );
+      expect(
+        result.readerWriter.testing.assets,
+        isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+      );
+    });
+
+    // A2: getter с именем, совпадающим с abstract-полем.
+    test('A2: getter name collides with abstract field — actual behavior',
+        () async {
+      final result = await _runResult(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'CollideStore')
+        abstract class CollideImpl {
+          abstract int sum;       // abstract-поле sum
+          int get sum => 42;      // getter sum — коллизия имён
+        }
+        ''',
+      );
+      printOnFailure('A2 getter=field collision → errors=${result.errors}');
+      // abstract sum → signal sum$; getter sum → computed sum$. Коллизия sum$
+      // (дважды) и get sum (дважды) → ошибка кодогенерации.
+      expect(result.succeeded, false,
+          reason: 'A2: getter с именем abstract-поля — коллизия имён должна '
+              'вызывать ошибку кодогенерации');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('Коллизия имён'),
+          contains('sum'),
+        ]),
+      );
+      expect(
+        result.readerWriter.testing.assets,
+        isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+      );
+    });
+
+    // A3: getter называется 'sumRaw' — конфликт с computed-контрактом.
+    test('A3: getter named like Raw suffix (sumRaw) → build error', () async {
+      final result = await _runResult(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'RawStore')
+        abstract class RawImpl {
+          abstract int a;
+          int get sum => a + 1;      // computed sum → sumRaw генерируется
+          int get sumRaw => a * 2;   // геттер УЖЕ называется sumRaw — коллизия!
+        }
+        ''',
+      );
+      printOnFailure('A3 getter=sumRaw collision → errors=${result.errors}');
+      // computed sum → sumRaw; пользовательский getter sumRaw → конфликт.
+      // Ошибка кодогенерации про коллизию имён.
+      expect(result.succeeded, false,
+          reason: 'A3: getter с именем *Raw конфликтует с computed-контрактом');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('Коллизия имён'),
+          contains('sumRaw'),
+        ]),
+      );
+      expect(
+        result.readerWriter.testing.assets,
+        isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+      );
+    });
+
+    // B1: abstract-поле с function type.
+    test('B1: abstract field with function type — actual behavior', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'FnStore')
+        abstract class FnImpl {
+          abstract int Function(int) transform;
+        }
+        ''',
+      );
+      printOnFailure('B1 function-typed field → generated=\n$generated');
+      // Signal<int Function(int)> — корректно ли типизируется?
+      expect(generated, contains('Signal<int Function(int)>'),
+          reason: 'B1: function type в abstract-поле → Signal с function type');
+    });
+
+    // B2: computed-геттер возвращает function type.
+    test('B2: computed getter returning function type — actual behavior',
+        () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'FnGetterStore')
+        abstract class FnGetterImpl {
+          abstract int multiplier;
+          int Function(int) get scale => (x) => x * multiplier;  // читает reactive
+        }
+        ''',
+      );
+      printOnFailure('B2 function-typed getter → generated=\n$generated');
+      // Computed<int Function(int)> — корректно ли?
+      expect(generated, contains('Computed<int Function(int)>'),
+          reason: 'B2: computed-геттер с function type → Computed с function type');
+    });
+  });
 }
 
 /// Пустые BuilderOptions для тестов — generator не параметризуется.
