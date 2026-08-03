@@ -1,7 +1,7 @@
 # signals-store
 
 Управление состоянием на базе [`signals`](https://pub.dev/packages/signals) v7
-для Dart/Flutter. Два互补имых подхода: **runtime-mixin** (без кодогенерации) и
+для Dart/Flutter. Два подхода: **runtime-mixin** (без кодогенерации) и
 **codegen** (статически типизированные сторы с computed-геттерами).
 
 [![pub: signals_store](https://img.shields.io/badge/signals__store-0.2.0-blue)](https://pub.dev/packages/signals_store)
@@ -12,12 +12,12 @@
 
 Монорепозиторий (Dart workspace) из четырёх пакетов:
 
-| Пакет | Версия | Назначение |
-|-------|--------|-----------|
-| [`signals_store`](packages/signals_store) | 0.2.0 | `ReactiveStore` mixin — runtime-стор через `noSuchMethod`, без кодогенерации |
-| [`signals_store_annotation`](packages/signals_store_annotation) | 0.2.0 | Аннотация `@Store` для codegen-подхода |
-| [`signals_store_generator`](packages/signals_store_generator) | 0.4.2 | Генератор кода: `@Store`-классы → типизированные сторы с `Signal`-полями и `Computed`-геттерами |
-| [`signals_store_example`](packages/signals_store_example) | — | Полноценный Flutter-пример «Tasker» (не публикуется на pub.dev) |
+| Пакет                                                           | Версия | Назначение                                                                                      |
+| --------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------- |
+| [`signals_store`](packages/signals_store)                       | 0.2.0  | `ReactiveStore` mixin — runtime-стор через `noSuchMethod`, без кодогенерации                    |
+| [`signals_store_annotation`](packages/signals_store_annotation) | 0.2.0  | Аннотация `@Store` для codegen-подхода                                                          |
+| [`signals_store_generator`](packages/signals_store_generator)   | 0.4.2  | Генератор кода: `@Store`-классы → типизированные сторы с `Signal`-полями и `Computed`-геттерами |
+| [`signals_store_example`](packages/signals_store_example)       | —      | Полноценный Flutter-пример «Tasker» (не публикуется на pub.dev)                                 |
 
 ## Два подхода
 
@@ -48,6 +48,7 @@ void main() {
 ```
 
 **Что генерируется** — см. [README генератора](packages/signals_store_generator/README.md):
+
 - `Signal`-поля с override-геттером/сеттером (`count` ↔ `count$.value`)
 - `Computed`-геттеры с escape-hatch (`doubled` → `doubled$.value`, `doubledRaw` → сырой пересчёт)
 - Pass-through concrete-поля (вложенные сторы, `MapSignal`-коллекции)
@@ -84,14 +85,14 @@ void main() {
 
 ### Когда что использовать
 
-| | Codegen (`@Store`) | Runtime (`ReactiveStore`) |
-|---|---|---|
-| Типобезопасность | полная статическая | полная статическая |
-| Computed-геттеры | ✅ автоматически | ❌ вручную через `computed()` |
-| Вложенные сторы (дерево) | ✅ типизированные подсторы | вручную |
-| Runtime-cost | zero (прямой доступ к `Signal`) | `noSuchMethod` + Map lookup |
-| Кодогенерация | требуется (`build_runner`) | не требуется |
-| Boilerplate | аннотация + `part` | mixin + конструктор |
+|                          | Codegen (`@Store`)              | Runtime (`ReactiveStore`)     |
+| ------------------------ | ------------------------------- | ----------------------------- |
+| Типобезопасность         | полная статическая              | полная статическая            |
+| Computed-геттеры         | ✅ автоматически                | ❌ вручную через `computed()` |
+| Вложенные сторы (дерево) | ✅ типизированные подсторы      | вручную                       |
+| Runtime-cost             | zero (прямой доступ к `Signal`) | `noSuchMethod` + Map lookup   |
+| Кодогенерация            | требуется (`build_runner`)      | не требуется                  |
+| Boilerplate              | аннотация + `part`              | mixin + конструктор           |
 
 Для production-приложений рекомендуется **codegen**; `ReactiveStore` удобен для
 прототипов или изолированных простых сторов.
