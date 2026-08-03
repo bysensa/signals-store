@@ -1,3 +1,24 @@
+## 0.4.3
+
+- **Bugfix (name collisions)**: a getter whose name collides with an abstract
+  field (`abstract int sum; int get sum => ...;`) or with the computed
+  contract suffix (`int get sumRaw => ...;` next to `int get sum`) previously
+  produced duplicate declarations (`sum$`, `get sum`, `sumRaw`) and broke the
+  consumer's compile. The generator now collects all names it will emit and
+  fails with a descriptive error naming the conflicting sources, asking to
+  rename one of them.
+- **Bugfix (named constructors)**: named constructors declared in the impl
+  class are now rejected with a descriptive error. They cannot initialize
+  abstract (Signal) fields, so the auto-generated unnamed constructor is the
+  only supported one. Unnamed constructors remain supported (they initialize
+  concrete fields via `super.x`).
+- **Bugfix (missing super-constructor)**: a pass-through concrete field
+  without an initializing-formal parameter in the superclass's unnamed
+  constructor previously emitted an invalid `required super.<field>` and broke
+  the consumer's compile. The generator now validates this upfront and fails
+  with a descriptive error suggesting to add the constructor or make the field
+  abstract.
+
 ## 0.4.2
 
 - **Bugfix (FP-4)**: a getter reading a concrete pass-through field of a
