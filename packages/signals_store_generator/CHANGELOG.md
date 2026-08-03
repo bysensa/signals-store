@@ -1,3 +1,13 @@
+## 0.4.1
+
+- **Bugfix**: reactivity flowing through call arguments is now detected. A
+  getter that passes a reactive value as an argument to a helper method
+  (e.g. `String get x => _fmt(balance);`) now becomes a `Computed`. Previously
+  the AST visitor did not traverse `MethodInvocation.argumentList` for bare
+  (target-less) calls, so the read of the reactive argument was lost and the
+  getter stayed plain. No interprocedural analysis is required: reading a
+  reactive value at the call site is itself reactive. Added 5 dataflow tests.
+
 ## 0.4.0
 
 - **Computed getters**: a concrete getter (a getter with a body) in a `@Store`
