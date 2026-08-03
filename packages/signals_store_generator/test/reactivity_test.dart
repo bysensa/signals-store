@@ -996,6 +996,122 @@ abstract class SubArgImpl {
           reason: 'D5: savings.amount (подстор) как аргумент → label computed');
     });
   });
+
+  // ===========================================================================
+  // АУДИТ 4 — false positives: геттер становится computed избыточно.
+  //
+  // Это НЕ потеря корректности (значение всегда верно), а избыточная мемоизация:
+  // computed кэширует значение, хотя семантически не зависит от реактивного
+  // состояния. Эмпирически runtime-signals НЕ пересчитывает такие computed,
+  // но детектор всё равно делает их computed из-за консервативных правил.
+  // ===========================================================================
+
+  group('audit4: false positives (excessive computed)', () {
+    // FP-1: геттер читает НЕ-reactive поле реактивного класса.
+    test('FP-1: reads non-reactive field of reactive class — actual behavior',
+        () async {
+      final reactive = await _detect(r'''
+import 'package:signals/signals.dart';
+class Logger {
+  final Signal<bool> verbose;   // ← есть Signal → Logger реактивен
+  final String name;            // ← НЕ reactive
+  Logger({required this.verbose, required this.name});
+}
+abstract class AppImpl {
+  final Logger logger;
+  AppImpl({required this.logger});
+  String get tag => logger.name;  // читает ТОЛЬКО name (не reactive)
+}
+''', storeImplNames: {}, targetClass: 'AppImpl');
+      printOnFailure('FP-1 reactive class non-reactive field → reactive=$reactive');
+      // ФАКТ: tag станет computed, т.к. logger реактивен (Logger имеет Signal).
+      // Это FP: tag не зависит реактивно от verbose, но мемоизируется.
+      expect(reactive, contains('tag'),
+          reason: 'FP-1: детектор считает logger реактивным (Logger имеет '
+              'Signal-поле) → tag computed ИЗБЫТОЧНО (читает только name)');
+    });
+
+    // FP-2: геттер-фабрика, возвращающий Signal, делает класс реактивным.
+    test('FP-2: factory getter returning Signal — actual behavior', () async {
+      final reactive = await _detect(r'''
+import 'package:signals/signals.dart';
+class Factory {
+  Signal<int> get make => Signal(0);  // ВОЗВРАЩАЕТ новый Signal
+}
+abstract class AppImpl {
+  final Factory factory;
+  AppImpl({required this.factory});
+  int get x => factory.make.value;
+}
+''', storeImplNames: {}, targetClass: 'AppImpl');
+      printOnFailure('FP-2 factory returning Signal → reactive=$reactive');
+      // ФАКТ: factory реактивен (каскад: returnType make = Signal).
+      // x => factory.make.value → x computed. Это FP: make создаёт НОВЫЙ
+      // signal каждый раз, мемоизация бессмысленна.
+      expect(reactive, contains('x'),
+          reason: 'FP-2: factory.make возвращает Signal → factory реактивен '
+              '→ x computed ИЗБЫТОЧНО');
+    });
+
+    // FP-3a: hashCode на signal — детектор считает реактивным (FP).
+    test('FP-3a: signal.hashCode — actual behavior', () async {
+      final reactive = await _detect(r'''
+import 'package:signals/signals.dart';
+final s = signal(10);
+abstract class AppImpl {
+  int get h => s.hashCode;  // hashCode НЕ реактивен в runtime
+}
+''', storeImplNames: {}, targetClass: 'AppImpl');
+      printOnFailure('FP-3a signal.hashCode → reactive=$reactive');
+      // Эмпирически hashCode НЕ реактивен (не подписывает), но детектор
+      // обобщает "любой accessor на Signal" → считает реактивным. Это FP.
+      expect(reactive, contains('h'),
+          reason: 'FP-3a: hashCode на signal — детектор считает реактивным '
+              '(обобщение accessor), но runtime НЕ пересчитывает');
+    });
+
+    // FP-3b: toString на signal — КОНТРОЛЬ (реактивен, НЕ FP).
+    test('FP-3b: signal.toString() is actually reactive (control)', () async {
+      final reactive = await _detect(r'''
+import 'package:signals/signals.dart';
+final s = signal(10);
+abstract class AppImpl {
+  String get str => s.toString();  // toString реактивен (читает .value внутри)
+}
+''', storeImplNames: {}, targetClass: 'AppImpl');
+      printOnFailure('FP-3b signal.toString → reactive=$reactive');
+      // Эмпирически toString реактивен (signals переопределяет его, читая value).
+      // Это НЕ FP — значение корректно пересчитывается.
+      expect(reactive, contains('str'),
+          reason: 'FP-3b: toString на signal реактивен (signals читает .value)');
+    });
+
+    // FP-4: геттер читает НЕ-реактивное concrete-поле @Store-подстора.
+    //       Подстор имеет abstract (реактивное) поле + concrete (pass-through)
+    //       поле. Геттер внешнего стора читает ТОЛЬКО concrete-поле.
+    test('FP-4: reads concrete pass-through field of @Store substore', () async {
+      final reactive = await _detect(r'''
+abstract class ConfigImpl {
+  abstract int timeout;        // ← abstract (реактивное, обёрнуто в Signal)
+  final String label;          // ← concrete (pass-through, НЕ реактивно)
+  ConfigImpl({required this.label});
+}
+abstract class AppImpl {
+  final ConfigImpl config;     // ← подстор (ConfigImpl ∈ storeImplNames)
+  AppImpl({required this.config});
+  String get tag => config.label;  // читает ТОЛЬКО label (concrete, не reactive)
+}
+''', storeImplNames: {'ConfigImpl'}, targetClass: 'AppImpl');
+      printOnFailure('FP-4 substore concrete field → reactive=$reactive');
+      // ОЖИДАНИЕ: tag НЕ должен становиться computed, т.к. label — concrete
+      // pass-through поле (не Signal, не abstract), его чтение не реактивно.
+      // ФАКТИЧЕСКОЕ поведение проверим — детектор может ложно считать config
+      // реактивным (он @Store impl) → tag computed (FP).
+      expect(reactive, isNot(contains('tag')),
+          reason: 'FP-4: config.label — concrete pass-through поле подстора, '
+              'его чтение не реактивно → tag должен остаться plain');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

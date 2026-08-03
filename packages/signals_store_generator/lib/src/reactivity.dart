@@ -241,10 +241,10 @@ Future<Set<String>> computeReactiveGetters({
   //    делегирующий в `_sum()`, тоже становится computed (G1).
   final analysisByMember = <String, _BodyAnalysis>{};
   for (final g in getters) {
-    analysisByMember[g.name!] = await _analyzeBody(g);
+    analysisByMember[g.name!] = await _analyzeBody(g, storeImplNames);
   }
   for (final m in methods) {
-    analysisByMember[m.name!] = await _analyzeBody(m);
+    analysisByMember[m.name!] = await _analyzeBody(m, storeImplNames);
   }
 
   // 3. Фикс-пойнт: пока множество растёт (чистая синхронная логика).
@@ -323,10 +323,13 @@ class _BodyAnalysis {
 /// Типы (`DateTime`), литералы и параметры отсекаются на этапе проверки
 /// `staticElement` (см. [_referencedRootOf]). Возвращает пустое множество,
 /// если AST-тело недоступно (например, член без сессии).
-Future<_BodyAnalysis> _analyzeBody(ExecutableElement member) async {
+Future<_BodyAnalysis> _analyzeBody(
+  ExecutableElement member,
+  Set<String> storeImplNames,
+) async {
   final body = await _resolvedBodyNode(member);
   if (body == null) return _BodyAnalysis(<String>{}, false);
-  final collector = _RootCollector();
+  final collector = _RootCollector(storeImplNames);
   body.accept(collector);
   return _BodyAnalysis(collector.roots, collector.hasSignalAccess);
 }
@@ -362,6 +365,12 @@ Future<FunctionBody?> _resolvedBodyNode(ExecutableElement member) async {
 /// обработан целиком: `session.currentUser` → только `session`).
 /// {@endtemplate}
 class _RootCollector extends GeneralizingAstVisitor<void> {
+  _RootCollector(this.storeImplNames);
+
+  /// Имена impl-классов, помеченных `@Store`. Нужны для поточечной проверки
+  /// полей подстора (FP-4): `config.label` где `label` — concrete pass-through.
+  final Set<String> storeImplNames;
+
   final roots = <String>{};
 
   /// True, если в теле есть обращение к выражению типа Signal/ReadonlySignal
@@ -389,6 +398,45 @@ class _RootCollector extends GeneralizingAstVisitor<void> {
     if (type != null && _isSignalType(type)) {
       hasSignalAccess = true;
     }
+  }
+
+  /// Определяет, реактивно ли чтение конкретного поля [fieldName] у выражения
+  /// типа [targetType], когда targetType — @Store-подстор.
+  ///
+  /// Решает FP-4: геттер вида `config.label`, где `config` — подстор, а
+  /// `label` — concrete pass-through поле (не Signal, не abstract). Раньше
+  /// детектор считал весь подстор реактивным и делал геттер computed
+  /// избыточно. Теперь проверяем КОНКРЕТНОЕ поле:
+  /// - abstract-поле → реактивно (обёрнуто в Signal);
+  /// - concrete-поле с Signal-типом → реактивно;
+  /// - concrete-поле с @Store impl типом → реактивно (вложенный подстор);
+  /// - concrete-поле с user-классом, содержащим Signal → реактивно (каскад);
+  /// - прочее concrete-поле → НЕ реактивно (FP-4 исключён).
+  ///
+  /// Возвращает `true`, если поле реактивно ИЛИ если targetType НЕ подстор
+  /// (в этом случае реактивность определяется другими правилами, не здесь).
+  bool _isReactiveFieldAccess(DartType? targetType, String fieldName) {
+    if (targetType is! InterfaceType) return true;
+    final element = targetType.element;
+    // Только для @Store-подсторов делаем поточечную проверку поля. Для прочих
+    // типов (Signal-коллекции, user-классы) реактивность определяется вне.
+    if (!storeImplNames.contains(element.name)) return true;
+    // Ищем конкретное поле по имени в @Store-классе.
+    final field = _findField(element, fieldName);
+    if (field == null) return true; // геттер или унаследованное — консервативно реактивно
+    // abstract-поле → обёрнуто в Signal → реактивно.
+    if (field.isAbstract) return true;
+    // concrete-поле → реактивно, только если его тип реактивен.
+    return isReactiveType(field.type, storeImplNames);
+  }
+
+  /// Ищет instance-поле по имени в классе (не static, не synthetic, не late).
+  FieldElement? _findField(InterfaceElement clazz, String name) {
+    for (final f in clazz.fields) {
+      if (f.isStatic || f.isSynthetic || f.isLate) continue;
+      if (f.name == name) return f;
+    }
+    return null;
   }
 
   /// True, если [node] — левая часть присваивания (`node = ...`, `node ??= ...`
@@ -421,9 +469,14 @@ class _RootCollector extends GeneralizingAstVisitor<void> {
     if (!_isWriteTarget(node)) {
       _checkSignalAccess(node.prefix, node.identifier.name);
     }
-    // `session.currentUser` → корень prefix.
+    // `session.currentUser` / `config.label` → корень prefix, НО только если
+    // читаемое поле реактивно. Для @Store-подстора проверяем конкретное поле
+    // (FP-4: `config.label` где label — concrete pass-through → не реактивно).
     final name = _referencedRootOf(node.prefix);
-    if (name != null) roots.add(name);
+    if (name != null &&
+        _isReactiveFieldAccess(node.prefix.staticType, node.identifier.name)) {
+      roots.add(name);
+    }
     // НЕ спускаемся в `.identifier`.
   }
 
@@ -440,9 +493,14 @@ class _RootCollector extends GeneralizingAstVisitor<void> {
       roots.add(node.propertyName.name);
       return;
     }
-    // `ui.filter.sortBy` → корень через рекурсию по target.
+    // `ui.filter.sortBy` / `config.label` → корень через рекурсию по target,
+    // НО только если читаемое поле реактивно. Для @Store-подстора проверяем
+    // конкретное поле (FP-4: concrete pass-through поле → не реактивно).
     final name = _referencedRootOf(node.target);
-    if (name != null) roots.add(name);
+    if (name != null &&
+        _isReactiveFieldAccess(node.target?.staticType, node.propertyName.name)) {
+      roots.add(name);
+    }
     // Спускаемся в target для цепочек: `a.b.sig.value` — target может сам
     // быть PropertyAccess с Signal-типом, и его нужно проверить (G15-аналог).
     node.target?.accept(this);
