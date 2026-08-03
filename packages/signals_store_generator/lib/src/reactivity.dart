@@ -485,7 +485,13 @@ class _RootCollector extends GeneralizingAstVisitor<void> {
     if (element is MethodElement) {
       roots.add(node.methodName.name);
     }
-    // Аргументы обходятся автоматически через visitNode родителя.
+    // Аргументы вызова: `helper(balance)` — balance (reactive) передаётся как
+    // аргумент. Чтение balance в позиции аргумента реактивно (dataflow: значение
+    // вычисляется и передаётся), поэтому обходим argumentList явно. По умолчанию
+    // визитор НЕ обходит их (мы не вызываем super), и reactive-аргументы терялись.
+    for (final arg in node.argumentList.arguments) {
+      arg.accept(this);
+    }
   }
 }
 

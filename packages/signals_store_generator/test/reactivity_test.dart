@@ -896,6 +896,106 @@ abstract class AppImpl {
           reason: 'G27: чистая мутация (write) не реактивна → не computed');
     });
   });
+
+  // ===========================================================================
+  // АУДИТ 3 — потоки данных (dataflow) через аргументы вызовов.
+  //
+  // Сценарий: геттер передаёт reactive-значение как АРГУМЕНТ в helper-метод,
+  // который сам по себе не реактивен (параметр — не свойство стора).
+  //   int get formatted => _fmt(balance);   // balance reactive
+  //   String _fmt(double v) => ...;          // v — параметр, не reactive
+  // Логически formatted реактивен (зависит от balance), но детектор анализирует
+  // тела независимо и не отслеживает поток аргументов → formatted остаётся plain.
+  // Эти тесты фиксируют целевое поведение (после реализации dataflow) и/или
+  // текущее ограничение.
+  // ===========================================================================
+
+  group('audit3: dataflow through call arguments', () {
+    // D1: геттер передаёт reactive-поле как аргумент в helper-метод.
+    test('D1: getter passing reactive field as helper argument — target behavior',
+        () async {
+      final reactive = await _detect(r'''
+abstract class DataflowImpl {
+  abstract double balance;
+  String get formatted => _fmt(balance);   // balance (reactive) → аргумент
+  String _fmt(double v) => '${v.toStringAsFixed(2)}';  // v — параметр
+}
+''', storeImplNames: {}, targetClass: 'DataflowImpl');
+      printOnFailure('D1 dataflow field→arg → reactive=$reactive');
+      // Целевое поведение (после реализации dataflow): formatted становится
+      // computed, т.к. в вызове _fmt(balance) аргумент balance реактивен.
+      // _fmt НЕ становится computed (это метод, не геттер), но учитывается
+      // в фикс-пойнте: раз formatted передаёт reactive-аргумент в _fmt, и _fmt
+      // выполняется в контексте formatted → formatted реактивен.
+      expect(reactive, contains('formatted'),
+          reason: 'D1: formatted передаёт reactive balance как аргумент → '
+              'должен стать computed (dataflow)');
+    });
+
+    // D2: геттер передаёт НЕ-reactive аргумент → остаётся plain.
+    test('D2: getter passing non-reactive argument stays plain', () async {
+      final reactive = await _detect(r'''
+abstract class PlainArgImpl {
+  final String label;
+  PlainArgImpl({required this.label});
+  String get upper => _fmt(label);   // label — concrete-поле, не reactive
+  String _fmt(String s) => s.toUpperCase();
+}
+''', storeImplNames: {}, targetClass: 'PlainArgImpl');
+      printOnFailure('D2 non-reactive arg → reactive=$reactive');
+      expect(reactive, isNot(contains('upper')),
+          reason: 'D2: label не reactive → upper остаётся plain');
+    });
+
+    // D3: цепочка dataflow — геттер передаёт reactive в helper, который
+    //     передаёт его дальше в другой helper.
+    test('D3: chained dataflow through nested helper calls', () async {
+      final reactive = await _detect(r'''
+abstract class ChainDataflowImpl {
+  abstract int a;
+  String get outer => _mid(a);          // a (reactive) → _mid
+  String _mid(int v) => _inner(v);      // v → _inner (поток a)
+  String _inner(int v) => v.toString();
+}
+''', storeImplNames: {}, targetClass: 'ChainDataflowImpl');
+      printOnFailure('D3 chained dataflow → reactive=$reactive');
+      expect(reactive, contains('outer'),
+          reason: 'D3: поток a через цепочку _mid→_inner → outer computed');
+    });
+
+    // D4: dataflow через computed-геттер (не поле) как аргумент.
+    test('D4: getter passing another computed as argument', () async {
+      final reactive = await _detect(r'''
+abstract class ComputedArgImpl {
+  abstract int a;
+  int get sum => a + 1;                 // sum — computed (читает a)
+  String get report => _fmt(sum);       // sum (computed) → аргумент _fmt
+  String _fmt(int v) => '=$v';
+}
+''', storeImplNames: {}, targetClass: 'ComputedArgImpl');
+      printOnFailure('D4 computed as arg → reactive=$reactive');
+      expect(reactive, containsAll(['sum', 'report']),
+          reason: 'D4: sum computed → report (через dataflow sum) computed');
+    });
+
+    // D5: dataflow через подстор (поле подстора как аргумент).
+    test('D5: getter passing substore field as argument', () async {
+      final reactive = await _detect(r'''
+abstract class SubImpl {
+  abstract double amount;
+}
+abstract class SubArgImpl {
+  final SubImpl savings;
+  SubArgImpl({required this.savings});
+  String get label => _fmt(savings.amount);  // savings.amount (reactive) → arg
+  String _fmt(double v) => v.toStringAsFixed(2);
+}
+''', storeImplNames: {'SubImpl'}, targetClass: 'SubArgImpl');
+      printOnFailure('D5 substore arg → reactive=$reactive');
+      expect(reactive, contains('label'),
+          reason: 'D5: savings.amount (подстор) как аргумент → label computed');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
