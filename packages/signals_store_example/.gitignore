@@ -1,6 +1,4 @@
-# Generated code
-*.g.dart
-*.freezed.dart
+
 
 # build_runner cache
 .dart_tool/build/
@@ -13,4 +11,3 @@ linux/
 macos/
 windows/
 web/
-
