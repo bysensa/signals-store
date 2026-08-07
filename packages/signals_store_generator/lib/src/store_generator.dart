@@ -130,7 +130,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // Unnamed-конструктор разрешён — он нужен для инициализации concrete-полей
     // через super.x.
     final namedCtors = element.constructors
-        .where((c) => !c.isSynthetic && !c.isFactory && c.name != 'new')
+        .where((c) => c.isOriginDeclaration && !c.isFactory && c.name != 'new')
         .toList();
     if (namedCtors.isNotEmpty) {
       final names = namedCtors.map((c) => c.name).join(', ');
@@ -244,9 +244,15 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     for (final p in element.unnamedConstructor?.formalParameters ??
         const <FormalParameterElement>[]) {
       if (p.isInitializingFormal) {
-        // Ключ — ИМЯ поля (оно же имя формала this.<field>). Для приватного
-        // поля `_secret` формал называется `this._secret`, имя — `_secret`.
-        superFormals[p.name!] = p;
+        // Ключ — ИМЯ ПОЛЯ. В analyzer 12+ `p.name` для приватного формала
+        // `this._secret` — это ПУБЛИЧНОЕ имя параметра `secret` (то, что видит
+        // вызывающий), а не имя поля. Имя поля берём через
+        // `FieldFormalParameterElement.field.name`. Fallback на `p.name` для
+        // публичных полей, где они совпадают.
+        final fieldName = p is FieldFormalParameterElement
+            ? (p.field?.name ?? p.name)
+            : p.name;
+        if (fieldName != null) superFormals[fieldName] = p;
         if (!p.isNamed) orderedPositionalFormals.add(p);
       }
     }
@@ -562,7 +568,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   /// `super.x` (чтобы сгенерированный класс не стал abstract).
   List<GetterElement> _concreteGetters(ClassElement clazz) {
     return clazz.getters
-        .where((g) => !g.isAbstract && !g.isStatic && !g.isSynthetic)
+        .where((g) => !g.isAbstract && !g.isStatic && g.isOriginDeclaration)
         .toList()
       ..sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
   }
@@ -583,7 +589,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   /// Сортируем по имени для детерминированного вывода.
   List<FieldElement> _allFields(ClassElement clazz) {
     return clazz.fields
-        .where((f) => !f.isSynthetic && !f.isStatic && !f.isLate)
+        .where((f) => f.isOriginDeclaration && !f.isStatic && !f.isLate)
         .toList()
       ..sort((a, b) => (a.name ?? '').compareTo(b.name ?? ''));
   }

@@ -1,3 +1,21 @@
+## 0.5.0
+
+- **Deps**: raised the `analyzer` constraint from `^8.1.1` to `^12.1.0`. This
+  is the highest analyzer version compatible with the current Flutter stable
+  SDK (which pins `meta 1.18.0`; `analyzer >=13.1.0` requires `meta ^1.18.3`,
+  and `test >=1.31.2` requires `analyzer >=13`, so 12.1.0 is the ceiling until
+  Flutter's bundled `meta` and the test stack are bumped). **Breaking for
+  consumers**: if your project depends on `analyzer` 8–11 (directly or through
+  another generator), resolve the conflict by upgrading that side. Migrated the
+  element-model usage to the analyzer 12 API: `isSynthetic` was removed from
+  the public element API (replaced with `!isOriginDeclaration`),
+  `ClassDeclaration.name` was removed from the AST (replaced with
+  `namePart.typeName.lexeme`), and a private initializing-formal's
+  `FormalParameterElement.name` now reports the *public* parameter name
+  (`secret`) rather than the field name (`_secret`) — super-formal matching now
+  keys on `FieldFormalParameterElement.field.name`. No change to the generated
+  output.
+
 ## 0.4.4
 
 - **Feature (self-sufficient concrete fields)**: concrete fields with an inline

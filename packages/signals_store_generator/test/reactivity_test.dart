@@ -1155,13 +1155,17 @@ Future<Set<String>> _detect(
     throw StateError('Не удалось зарезолвить unit: $resolved');
   }
   // Целевой класс: явно указанный [targetClass], иначе первый abstract-класс.
+  // В analyzer 12+ `ClassDeclaration.name` убран; имя — через
+  // `namePart.typeName.lexeme` (AST-уровень, Token.lexeme).
   final candidates = resolved.unit.declarations
       .whereType<ClassDeclaration>()
-      .where((c) => c.abstractKeyword != null || c.name.toString() == targetClass);
+      .where((c) =>
+          c.abstractKeyword != null ||
+          c.namePart.typeName.lexeme == targetClass);
   final ClassDeclaration clazz;
   if (targetClass != null) {
     clazz = candidates.firstWhere(
-      (c) => c.name.toString() == targetClass,
+      (c) => c.namePart.typeName.lexeme == targetClass,
       orElse: () => throw StateError('Класс $targetClass не найден в источнике'),
     );
   } else {
@@ -1169,7 +1173,8 @@ Future<Set<String>> _detect(
   }
   final fragment = clazz.declaredFragment;
   if (fragment == null) {
-    throw StateError('ClassDeclaration без declaredFragment: ${clazz.name}');
+    throw StateError(
+        'ClassDeclaration без declaredFragment: ${clazz.namePart.typeName.lexeme}');
   }
   final element = fragment.element;
   return computeReactiveGetters(

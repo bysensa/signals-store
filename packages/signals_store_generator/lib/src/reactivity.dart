@@ -106,14 +106,14 @@ bool _classHasReactiveMember(
 
   // Поля самого класса/mixin.
   for (final field in element.fields) {
-    if (field.isStatic || field.isSynthetic || field.isLate) continue;
+    if (field.isStatic || !field.isOriginDeclaration || field.isLate) continue;
     if (isReactiveType(field.type, storeImplNames, visited: nextVisited)) {
       return true;
     }
   }
   // Геттеры тоже могут быть реактивными (int get x => _sig.value).
   for (final getter in element.getters) {
-    if (getter.isAbstract || getter.isStatic || getter.isSynthetic) continue;
+    if (getter.isAbstract || getter.isStatic || !getter.isOriginDeclaration) continue;
     // Геттер реактивен, если его тип возврата реактивен (упрощённая проверка —
     // без анализа тела, иначе возможны циклы через getter-ссылки).
     if (isReactiveType(
@@ -277,7 +277,7 @@ Future<Set<String>> computeReactiveGetters({
 /// (только геттеры). См. G1 в аудите корректности.
 Iterable<MethodElement> _concreteMethods(ClassElement clazz) {
   return clazz.methods.where(
-    (m) => !m.isAbstract && !m.isStatic && !m.isSynthetic,
+    (m) => !m.isAbstract && !m.isStatic && m.isOriginDeclaration,
   );
 }
 
@@ -288,7 +288,7 @@ Iterable<MethodElement> _concreteMethods(ClassElement clazz) {
 /// состояние экземпляра стора — аналогично полям в [_instanceFields]).
 Iterable<GetterElement> _concreteGetters(ClassElement clazz) {
   return clazz.getters.where(
-    (a) => !a.isAbstract && !a.isStatic && !a.isSynthetic,
+    (a) => !a.isAbstract && !a.isStatic && a.isOriginDeclaration,
   );
 }
 
@@ -298,7 +298,7 @@ Iterable<GetterElement> _concreteGetters(ClassElement clazz) {
 /// реактивных имён была консистентна с полями, которые генератор превращает
 /// в signals.
 Iterable<FieldElement> _instanceFields(ClassElement clazz) {
-  return clazz.fields.where((f) => !f.isSynthetic && !f.isStatic && !f.isLate);
+  return clazz.fields.where((f) => f.isOriginDeclaration && !f.isStatic && !f.isLate);
 }
 
 /// Результат анализа тела геттера/метода на реактивность.
@@ -433,7 +433,7 @@ class _RootCollector extends GeneralizingAstVisitor<void> {
   /// Ищет instance-поле по имени в классе (не static, не synthetic, не late).
   FieldElement? _findField(InterfaceElement clazz, String name) {
     for (final f in clazz.fields) {
-      if (f.isStatic || f.isSynthetic || f.isLate) continue;
+      if (f.isStatic || !f.isOriginDeclaration || f.isLate) continue;
       if (f.name == name) return f;
     }
     return null;
