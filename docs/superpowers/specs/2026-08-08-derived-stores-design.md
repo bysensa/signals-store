@@ -126,7 +126,7 @@ class TodoDetailsStore extends TodoDetailsStoreImpl {
   set todoId(String value) => todoId$.value = value;
 
   @override
-  late final AppStoreImpl root = StoreRootScope.of<AppStoreImpl>();
+  AppStoreImpl get root => StoreRootScope.of<AppStoreImpl>();
 
   late final Computed<Todo?> todo$ = computed(() => todoRaw,
       options: ComputedOptions<Todo?>(name: 'TodoDetailsStore.todo'));
@@ -145,8 +145,12 @@ class TodoDetailsStore extends TodoDetailsStoreImpl {
 }
 ```
 
-- `root` — `late final`, резолвится лениво при первом обращении (внутри
-  вычисления computed). К этому моменту корень уже зарегистрирован.
+- `root` — **геттер** (не `late final`-поле): резолвит `StoreRootScope.of<T>()`
+  при каждом обращении. Поэтому derived всегда видит **текущий** корень —
+  пересоздание корня (см. «Пересоздание корня») не оставляет derived привязанным
+  к старому инстансу. Стоимость (скан реестра, N≤2) на каждое вычисление
+  computed пренебрежимо мала; `of<T>()` читает `List`/`Expando`, не сигналы,
+  поэтому ложных зависимостей в computed не возникает.
 - `dispose()` генерируется только для derived (экранный lifecycle:
   `State.dispose()` → `store.dispose()`). Корневые сторы не меняются
   (app-lifetime).
@@ -183,8 +187,9 @@ class StoreRootScope {
   static final List<Object> _testFallback = [];
   static bool _testMode = false;
 
-  /// Регистрирует корень в активном окружении. Повторная регистрация корня
-  /// того же типа — заменяет (hot reload, повторное создание в тесте).
+  /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
+  /// того же типа заменяет предыдущую (hot reload, повторное создание в тесте).
+  /// Превентивно чистит мёртвые weak-записи (`target == null`).
   static void register(Object root);
 
   /// Резолвит корень по типу в активном окружении (`is T`-скан).
@@ -332,8 +337,33 @@ Root-статус — **явная маркировка**, а не вывод и
 - **Хук `onDispose()`** — лишняя конвенция имени; заменён естественным
   override: impl объявляет `dispose()`, генератор вызывает `super.dispose()`
   первым.
+- **`late final` root-поле в derived** — кеширует корень при первом обращении,
+  оставляя derived привязанным к **старому** инстансу после пересоздания корня.
+  Заменено геттером `root => StoreRootScope.of<T>()` — резолв при каждом
+  обращении, derived всегда видит актуальный корень.
 - **zone-values с форком зон (`runIsolated`)** — не нужно: Expando по
   Zone.current даёт изоляцию без форков.
+
+## Пересоздание корня
+
+Сценарии смены инстанса корня и поведение `StoreRootScope`:
+
+- **Hot restart:** статика сбрасывается, `main()` перевызывается → регистрация
+  в чистый реестр. Корректно.
+- **App-swap с dispose** (logout → `old.dispose()` → `new AppStore()`): dispose
+  корня вызывает `unregister(old)`, затем конструктор нового регистрирует себя.
+  Корректно.
+- **App-swap без dispose:** `register(new)` убирает старую weak-запись того же
+  `runtimeType` (replace), мёртвые weak-записи чистятся при `register` и `of<T>`
+  превентивно (`target == null`). Корректно — реестр не копит мусор.
+- **Derived, живущий через пересоздание корня:** поскольку root — **геттер**
+  (не `late final`), свежесозданный derived всегда привяжется к **актуальному**
+  корню при первом обращении. Уже-живущий derived, чьи computed подписаны на
+  сигналы **старого** корня, при пересоздании автоматически не переподпишется
+  (computed переоценивается по триггеру своих текущих зависимостей). Поэтому
+  **контракт: время жизни derived ≤ время жизни текущего корня.** На практике
+  пересоздание корня (logout) совпадает с разборкой UI (`Navigator` reset), и
+  старые derived диспозятся вместе с экранами — staleness не возникает.
 
 ## Жизненный цикл: `dispose()` для `@Store` и `@DerivedStore`
 

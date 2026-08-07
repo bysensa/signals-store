@@ -326,6 +326,15 @@ void main() {
     StoreRootScope.unregister(app);
     expect(() => StoreRootScope.of<_App>(), throwsStateError);
   });
+
+  // Пересоздание корня без dispose (replace): новая регистрация вытесняет старую.
+  test('re-create root without dispose: new instance wins', () {
+    final first = _App();
+    StoreRootScope.register(first);
+    final second = _App();
+    StoreRootScope.register(second); // dispose не вызывался — replace по типу
+    expect(StoreRootScope.of<_App>(), same(second));
+  });
 }
 
 class _App {}
@@ -380,8 +389,12 @@ class StoreRootScope {
 
   /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
   /// того же типа заменяет предыдущую (hot reload, повторное создание в тесте).
+  /// Превентивно чистит мёртвые weak-записи (`target == null`).
   static void register(Object root) {
     final registry = _activeRegistry();
+    // Превентивная очистка мёртвых weak-записей: реестр не копит мусор между
+    // вызовами of<T> (важно при пересоздании корня без dispose — см. спеку).
+    registry.removeWhere((ref) => ref.target == null);
     registry
       ..removeWhere((ref) => ref.target?.runtimeType == root.runtimeType)
       ..add(WeakReference(root));
@@ -855,7 +868,10 @@ abstract class TodoDetailsStoreImpl {
     );
   });
 
-  test('derived store: dispose() emitted disposing signals and computed', () async {
+  // --- Пересоздание корня: root-геттер (не late final) видит актуальный корень ---
+
+  test('derived store: root is a getter (not late final) → sees re-registered root',
+      () async {
     final generated = await _run(packageConfig, headers, '''
 @Store(name: 'AppStore', root: true)
 abstract class AppStoreImpl {
@@ -865,19 +881,30 @@ abstract class AppStoreImpl {
 @DerivedStore(name: 'D')
 abstract class DImpl {
   abstract AppStoreImpl get root;
-  abstract int a;
-  int get b => root.count;
+  int get doubled => root.count * 2;
 }
 ''');
     expect(
       generated,
       allOf([
-        contains('void dispose()'),
-        contains('a\$.dispose()'),
-        contains('b\$.dispose()'),
+        contains('AppStoreImpl get root => StoreRootScope.of<AppStoreImpl>()'),
+        isNot(contains('late final AppStoreImpl root')),
       ]),
     );
+    await _expectCompiles(headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl { abstract int count; }
+
+@DerivedStore(name: 'D')
+abstract class DImpl {
+  abstract AppStoreImpl get root;
+  int get doubled => root.count * 2;
+}
+
+$generated''');
   });
+
+  test('derived store: dispose() emitted disposing signals and computed', () async {
 
   test('derived store: concrete dispose() in impl → super.dispose() first', () async {
     final generated = await _run(packageConfig, headers, '''
@@ -1186,7 +1213,7 @@ Expected: FAIL (generated не содержит root-of / dispose; или build 
     if (isDerived) {
       buffer.writeln();
       buffer.writeln('  @override');
-      buffer.writeln('  late final $rootTypeStr $rootMemberName = '
+      buffer.writeln('  $rootTypeStr get $rootMemberName = '
           'StoreRootScope.of<$rootTypeStr>();');
     }
 ```
@@ -1196,6 +1223,12 @@ Expected: FAIL (generated не содержит root-of / dispose; или build 
   `super.dispose()` вызывается если impl объявил concrete dispose, и unregister
   не нужен (derived не регистрируется). Убедиться, что dispose-фрагмент не
   дублируется — он один, в общем пути.
+
+**Важно:** root — именно **геттер** (`get root => StoreRootScope.of<...>()`),
+не `late final`-поле. Резолв при каждом обращении гарантирует, что свежесозданный
+derived привяжется к актуальному корню после пересоздания (контракт спеки
+«Пересоздание корня»). `of<T>()` читает List/Expando (не сигналы) → ложных
+зависимостей в computed нет.
 
 - [ ] **Step 5: Запустить derived-тесты — должны пройти**
 
@@ -1486,6 +1519,8 @@ git commit -m "chore: derived stores feature complete"
 **Reuse requirement:** логика полей/геттеров/конструктора/коллизий/dispose — в едином `_emitStoreClass` (Task 5); `@DerivedStore` не дублирует её, а передаёт надстройки (Task 6). Дублирование между `@Store` и `@DerivedStore` исключено по построению.
 
 **Unified dispose:** dispose эмитится для всех сторов (`@Store` и `@DerivedStore`) одним фрагментом в `_emitStoreClass` (Task 4 вводит, Task 5 обобщает, Task 6 только включает derived-поля — без копии кода). Root-стор дополнительно `unregister`.
+
+**Root re-creation:** root в derived — геттер (`get root => of<T>()`), не `late final` (Task 6 Step 4 + тест). Свежесозданный derived привяжется к актуальному корню; контракт «время жизни derived ≤ время жизни корня» — в спеке. `register` превентивно чистит мёртвые weak-записи; replace-without-dispose покрыт тестом (Task 3).
 
 **WeakReference / cycles:** `StoreRootScope` хранит только `WeakReference`; `of<T>` убирает мёртвые записи; root-стор `unregister` в dispose для детерминизма (Task 3). Цикл scope→root→derived→(через of)root разорван — scope не держит стор сильно.
 
