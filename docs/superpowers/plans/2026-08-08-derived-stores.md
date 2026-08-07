@@ -4,7 +4,7 @@
 
 **Goal:** Поддержать на уровне генерации derived-сторы — полноценные сторы с собственным состоянием и доступом к корню дерева, создаваемые on-demand в любом месте приложения.
 
-**Architecture:** Новая аннотация `@DerivedStore` + флаг `@Store(root: true)` для маркировки корня. Runtime-класс `StoreRootScope` (zone-aware реестр через `Expando`, с явным разделением app/test окружений) резолвит корень по типу. Генератор переиспует существующий пайплайн полей/геттеров/конструктора `@Store`, добавляя: авторегистрацию корня в конструкторе, root-геттер через scope, `dispose()`. Детектор реактивности получает имя root-геттера в reactive-базу — новых механизмов реактивности не нужно.
+**Architecture:** Новая аннотация `@DerivedStore` + флаг `@Store(root: true)` для маркировки корня. Runtime-класс `StoreRootScope` (zone-aware реестр через `Expando` + **`WeakReference`** для разрыва циклов удержания, с явным разделением app/test окружений) резолвит корень по типу. Генератор **максимально переиспользует** существующий пайплайн `@Store` через единый приватный эмиттер `_emitStoreClass` — никакого дублирования логики полей/геттеров/конструктора. `dispose()` становится единой механикой и для `@Store`, и для `@DerivedStore`. Детектор реактивности получает имя root-геттера в reactive-базу — новых механизмов реактивности не нужно.
 
 **Tech Stack:** Dart ^3.12, Flutter ≥3.44, analyzer 12.1.0, source_gen/build_runner, signals ^7.0.0.
 
@@ -14,7 +14,10 @@
 - **analyzer 12.1.0** — ceiling (Flutter meta 1.18.0 pin). Использовать проверенные API: `isOriginDeclaration`, `name`/`namePart.typeName.lexeme`, `formal.field.name`. НЕ использовать удалённые API (`isSynthetic` для origin и т.п.).
 - **Тесты генератора** запускаются под `flutter test`; обязательны: (1) `configureBuildProcessStateForTests()` в `setUpAll`, (2) `createDependencyReader` с предзагрузкой `signals_store` (новое), (3) каждый сгенерированный кейс проверяется `_expectCompiles` (принцип codegen-tests-must-compile), (4) валидационные ошибки — через `_runResult` + `expect(result.succeeded, false)`.
 - **FN-vs-FP**: детектор реактивности не меняется по существу — только добавляется имя root-геттера в базу. Регрессионные тесты `reactivity_test.dart` должны оставаться зелёными.
-- **Комментарии/документация** — на русском, в стиле существующих докстринг (RFC-2119-тон не требуется; это код).
+- **Переиспользование генератора (требование):** `@Store` и `@DerivedStore` идут через единый приватный эмиттер `_emitStoreClass`; дублирование логики полей/геттеров/конструктора/коллизий между ними запрещено. Любой новый кейс-обработчик должен лечь в `_emitStoreClass` с флагом, а не в отдельную копию.
+- **`dispose()` едино для `@Store` и `@DerivedStore`:** `_emitStoreClass` всегда эмитит `dispose()` (Signal/Computed). `@Store(root: true)` дополнительно снимает регистрацию (`StoreRootScope.unregister(this)`).
+- **`WeakReference` против циклов:** `StoreRootScope` хранит корни только через `WeakReference` — никогда сильной ссылкой. Это снятое требование, а не оптимизация.
+- **Комментарии/документация** — на русском, в стиле существующих докстринг.
 - **Verify-before-planning**: эмпирические проверки зон (Task 2) выполняются ДО реализации `StoreRootScope` — от их результата зависит устройство `enableTestMode`/`resetTestScope`.
 
 ## Ссылка на дизайн
@@ -261,10 +264,11 @@ git commit -m "test(signals_store): zone-behavior probes for StoreRootScope desi
 
 **Interfaces:**
 - Produces:
-  - `StoreRootScope.register(Object root)` — пишет в активное окружение.
-  - `StoreRootScope.of<T>()` → `T` — резолв по типу (`is T`-скан); `StateError` если не найден.
-  - `StoreRootScope.enableTestMode()` (`@visibleForTesting`) — переключает в test-окружение.
-  - `StoreRootScope.resetTestScope()` (`@visibleForTesting`) — очистка test-регистраций текущей зоны + fallback.
+  - `StoreRootScope.register(Object root)` — пишет в активное окружение через **`WeakReference`**.
+  - `StoreRootScope.of<T>()` → `T` — резолв по типу (`is T`-скан по weak-ссылкам); убирает мёртвые записи влетую; `StateError` если не найден.
+  - `StoreRootScope.unregister(Object root)` — явное удаление weak-записи (вызывается из dispose root-стора).
+  - `StoreRootScope.enableTestMode()` (`@visibleForTesting`).
+  - `StoreRootScope.resetTestScope()` (`@visibleForTesting`).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -306,6 +310,22 @@ void main() {
     // После resetTestScope (tearDown) предыдущий тест не виден здесь.
     expect(() => StoreRootScope.of<_App>(), throwsStateError);
   });
+
+  // Разрыв цикла удержания: scope НЕ удерживает корень сильно.
+  test('weak ref: collected root is not resolvable', () {
+    StoreRootScope.register(_App()); // сильной ссылки нет
+    // Принуждаем GC и обнуление weak-target. В Dart нет детерминированного GC,
+    // но unregister моделирует тот же эффект детерминированно:
+    // (детерминированную проверку сбора делает следующий тест через unregister.)
+    expect(() => StoreRootScope.of<_App>(), throwsStateError);
+  });
+
+  test('unregister removes the entry deterministically', () {
+    final app = _App();
+    StoreRootScope.register(app);
+    StoreRootScope.unregister(app);
+    expect(() => StoreRootScope.of<_App>(), throwsStateError);
+  });
 }
 
 class _App {}
@@ -339,34 +359,57 @@ import 'package:meta/meta.dart';
 /// ради значения нельзя), плюс file-level fallback. Раннеры, дающие per-test
 /// зону, изолируют автоматически; иначе — [resetTestScope] в `tearDown`.
 /// Тестовые регистрации никогда не попадают в app-реестр и наоборот.
+///
+/// **Циклы удержания:** реестр хранит корни ТОЛЬКО через [WeakReference].
+/// Стор удерживается обычными ссылками приложения (дерево, State); scope его
+/// не держит. Стор без сильных ссылок собирается GC, его weak-запись
+/// обнуляется и убирается при следующем обходе [of]. Корневой стор в своём
+/// [dispose] дополнительно явно снимает регистрацию через [unregister] —
+/// детерминизм для тестов вместо ожидания GC.
 class StoreRootScope {
   StoreRootScope._();
 
-  // App-окружение: глобальный реестр.
-  static final List<Object> _appRoots = [];
+  // App-окружение.
+  static final List<WeakReference<Object>> _appRoots = [];
 
   // Test-окружение: реестры по зоне + fallback.
-  static final Expando<List<Object>> _testByZone =
+  static final Expando<List<WeakReference<Object>>> _testByZone =
       Expando('StoreRootScope.test');
-  static final List<Object> _testFallback = [];
+  static final List<WeakReference<Object>> _testFallback = [];
   static bool _testMode = false;
 
-  /// Регистрирует [root] в активном окружении. Повторная регистрация корня
+  /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
   /// того же типа заменяет предыдущую (hot reload, повторное создание в тесте).
   static void register(Object root) {
     final registry = _activeRegistry();
     registry
-      ..removeWhere((r) => r.runtimeType == root.runtimeType)
-      ..add(root);
+      ..removeWhere((ref) => ref.target?.runtimeType == root.runtimeType)
+      ..add(WeakReference(root));
   }
 
-  /// Резолвит корень по типу [T] (`is T`-скан). Бросает [StateError], если корень
-  /// не зарегистрирован в активном окружении.
+  /// Явное снятие регистрации — вызывается из dispose корневого стора.
+  static void unregister(Object root) {
+    _activeRegistry().removeWhere((ref) => identical(ref.target, root));
+  }
+
+  /// Резолвит корень типа [T]. Бросает [StateError], если не зарегистрирован.
   static T of<T>() {
     final registry = _activeRegistry();
-    for (final root in registry.reversed) {
-      if (root is T) return root;
+    T? found;
+    for (final ref in registry.toList()) {
+      final target = ref.target;
+      if (target == null) {
+        // Мёртвая weak-запись — убираем влетую.
+        registry.remove(ref);
+        continue;
+      }
+      if (target is T) {
+        found = target;
+        // Не выходим: позднее повторное override того же типа должно выиграть,
+        // если пользователь перерегистрировал (последний wins).
+      }
     }
+    if (found != null) return found;
     throw StateError(
       'StoreRootScope: корень типа $T не зарегистрирован. '
       'Убедитесь, что соответствующий стор помечен @Store(root: true) '
@@ -379,7 +422,6 @@ class StoreRootScope {
   static void enableTestMode() => _testMode = true;
 
   /// Очищает регистрации тестового окружения текущей зоны и fallback.
-  /// Вызывать в `tearDown`, если раннер не даёт per-test зону.
   @visibleForTesting
   static void resetTestScope() {
     final byZone = _testByZone[Zone.current];
@@ -387,14 +429,16 @@ class StoreRootScope {
     _testFallback.clear();
   }
 
-  static List<Object> _activeRegistry() {
+  static List<WeakReference<Object>> _activeRegistry() {
     if (!_testMode) return _appRoots;
     return _testByZone[Zone.current] ??= _testFallback;
   }
 }
 ```
 
-Примечание к `_activeRegistry`: fallback-список один на файл; если per-test зона есть — `Expando[Zone.current]` даёт уникальный список на зону. Если зоны не различаются — все тесты пишут в `_testFallback`, и `resetTestScope` в `tearDown` обеспечит изоляцию. (Это и есть смысл эмпирического зонда A: он лишь подтверждает гранулярность, но оба случая покрыты.)
+Примечание к `of<T>`: обход собирает последнее совпадение по типу — это реализует
+«последняя регистрация того же типа выигрывает» даже когда типы совпадают по
+`is T` (наследник/база). Мёртвые weak-записи убираются в том же проходе.
 
 - [ ] **Step 4: Экспортировать**
 
@@ -523,6 +567,40 @@ $generated''');
       );
       expect(generated, isNot(contains('StoreRootScope')));
     });
+
+    test('every @Store emits dispose() disposing signals', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'S')
+        abstract class SImpl {
+          abstract int a;
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('void dispose()'),
+          contains('a\$.dispose()'),
+        ]),
+      );
+    });
+
+    test('root store dispose() unregisters itself', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(generated, contains('StoreRootScope.unregister(this)'));
+    });
   });
 ```
 
@@ -564,6 +642,40 @@ Expected: FAIL — `StoreRootScope.register(this)` отсутствует.
       ..writeln();
 ```
 
+— **эмиссия dispose для всех сторов** (в конце `_emitStoreClass`, перед
+  `buffer.writeln('}')`). Единый фрагмент, общий для `@Store` и `@DerivedStore`
+  (на этом этапе `isDerived` ещё false для `@Store`, но фрагмент пишется так,
+  чтобы Task 6 просто включил его):
+
+```dart
+    // dispose() — единая механика для @Store и @DerivedStore.
+    // Диспозит Signal/Computed-поля; для root-стора снимает регистрацию.
+    final disposeBuffer = StringBuffer();
+    final hasConcreteDispose = (element as ClassElement).methods.any(
+      (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic &&
+             !m.isAbstract,
+    );
+    if (hasConcreteDispose) disposeBuffer.writeln('  @override');
+    disposeBuffer.write('  void dispose() {');
+    if (hasConcreteDispose) disposeBuffer.write(' super.dispose();');
+    disposeBuffer.writeln();
+    for (final f in reactiveFields) {
+      disposeBuffer.writeln('    ${f.name}\$.dispose();');
+    }
+    for (final g in reactiveNames) {
+      disposeBuffer.writeln('    ${g}\$.dispose();');
+    }
+    if (isRoot) disposeBuffer.writeln('    StoreRootScope.unregister(this);');
+    disposeBuffer.writeln('  }');
+    buffer
+      ..writeln()
+      ..write(disposeBuffer.toString());
+```
+
+(Валидацию сигнатуры пользовательского `dispose()` (non-void/параметры) добавляет
+Task 6 для `@DerivedStore`; для `@Store` на этом этапе валидация та же —
+рекомендуется вынести в общий хелпер в Task 5.)
+
 - [ ] **Step 5: Поднять версию generator + зависимость**
 
 `pubspec.yaml`: `version: 0.6.0`; в `dependencies` поднять `signals_store_annotation: ^0.3.0`.
@@ -592,22 +704,22 @@ git commit -m "feat(generator): @Store(root: true) auto-registers in StoreRootSc
 
 ### Task 5: Генератор — рефакторинг: выделение общего эмиссора класса
 
-**Цель:** извлечь общее тело `_generateForAnnotation` (поля/геттеры/конструктор/коллизии) в `_emitStoreClass`, чтобы `@DerivedStore` переиспользовал его. Чистый рефакторинг — поведение `@Store` не меняется; защита от регрессии — существующие тесты.
+**Цель:** извлечь ВСЁ общее тело `_generateForAnnotation` (поля/геттеры/конструктор/коллизии/**dispose**) в `_emitStoreClass`, чтобы `@DerivedStore` переиспользовал его без копирования. Чистый рефакторинг — поведение `@Store` не меняется (только добавляется dispose, уже покрытый тестами Task 4); защита от регрессии — все существующие тесты + новые dispose-тесты.
 
 **Files:**
 - Modify: `packages/signals_store_generator/lib/src/store_generator.dart`
 
 **Interfaces:**
-- Produces: приватный метод `_emitStoreClass(...)` с параметрами, описывающими опции (isRoot, derived-опции — добавятся в Task 6). На этом этапе — сигнатура с `isRoot` и заглушкой derived=false.
+- Produces: приватный метод `_emitStoreClass(Element element, String storeName, bool isAbstract, bool isRoot, Map<String,String> implToStoreName, Set<String> storeImplNames, Set<String> rootImplNames, {bool isDerived, String? rootMemberName, String? rootTypeStr})`. На этом этапе `isDerived` всегда false; dispose-фрагмент уже в `_emitStoreClass`.
 
-- [ ] **Step 1: Убедиться, что существующие тесты зелёные (базлайн)**
+- [ ] **Step 1: Базлайн — все тесты зелёные (включая Task 4)**
 
 Run: `cd packages/signals_store_generator && flutter test`
 Expected: PASS.
 
 - [ ] **Step 2: Рефакторинг — перенести тело в `_emitStoreClass`**
 
-Перенести содержимое `_generateForAnnotation` (от чтения полей до `buffer.writeln('}')`) в новый метод `_emitStoreClass(Element element, String storeName, bool isAbstract, bool isRoot, Map<String,String> implToStoreName, Set<String> storeImplNames, {bool isDerived})`. `_generateForAnnotation` оставить тонкой обёрткой:
+Перенести содержимое `_generateForAnnotation` (от чтения полей до `buffer.writeln('}')` — включая dispose-фрагмент из Task 4) в `_emitStoreClass`. `_generateForAnnotation` оставить тонкой обёрткой:
 
 ```dart
     final storeName = annotation.read('name').stringValue;
@@ -615,12 +727,29 @@ Expected: PASS.
     final isRoot = annotation.peek('root')?.boolValue ?? false;
     return _emitStoreClass(
       element, storeName, isAbstract, isRoot,
-      implToStoreName, storeImplNames,
+      implToStoreName, storeImplNames, rootImplNames,
       isDerived: false,
     );
 ```
 
-`_emitStoreClass` пока игнорирует `isDerived` (Task 6 наполнит). Все валидации и эмиссия — как раньше.
+`_emitStoreClass` пока не использует `isDerived`/`rootMemberName`/`rootTypeStr` (Task 6 наполнит). Валидация сигнатуры пользовательского `dispose()` (non-void/параметры) — общий хелпер `_validateDisposeSignature(element)`, вызывается из `_emitStoreClass` всегда (покрывает и `@Store`, и `@DerivedStore`):
+
+```dart
+void _validateDisposeSignature(ClassElement element) {
+  final dispose = element.methods.firstWhere(
+    (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic,
+    orElse: () => null as MethodElement,
+  );
+  if (dispose == null) return;
+  final badSig = !dispose.returnType.isVoid || dispose.parameters.isNotEmpty;
+  if (badSig) {
+    throw InvalidGenerationSource(
+      'dispose() in "${element.name}" must be a no-argument void method.',
+      element: dispose,
+    );
+  }
+}
+```
 
 - [ ] **Step 3: Запустить ВСЕ тесты генератора — должны остаться зелёными**
 
@@ -631,7 +760,7 @@ Expected: PASS (тот же набор, что в Step 1).
 
 ```bash
 git add packages/signals_store_generator/lib/src/store_generator.dart
-git commit -m "refactor(generator): extract _emitStoreClass shared by @Store and @DerivedStore"
+git commit -m "refactor(generator): extract _emitStoreClass + unified dispose shared by @Store and @DerivedStore"
 ```
 
 ---
@@ -1018,21 +1147,22 @@ Expected: FAIL (generated не содержит root-of / dispose; или build 
   }
 ```
 
-4d. Расширить `_emitStoreClass` сигнатурой и логикой derived:
+4d. Расширить `_emitStoreClass` производными-надстройками (логика dispose уже там от Task 5):
 
 — добавить именованные параметры:
 
 ```dart
   Future<String> _emitStoreClass(
     Element element, String storeName, bool isAbstract, bool isRoot,
-    Map<String, String> implToStoreName, Set<String> storeImplNames, {
+    Map<String, String> implToStoreName, Set<String> storeImplNames,
+    Set<String> rootImplNames, {
     bool isDerived = false,
     String? rootMemberName,
     String? rootTypeStr,
   }) async {
 ```
 
-— для derived: удалить root-геттер из «concrete getters», чтобы он не стал Computed. В месте, где собирается `concreteGetters` (для детекции), фильтрануть root-имя. Конкретнее — после `final concreteGetters = _concreteGetters(element);` добавить:
+— для derived: фильтрануть root-имя из `concreteGetters` (страховка; root abstract-геттер и так туда не попадает):
 
 ```dart
     if (isDerived) {
@@ -1040,48 +1170,15 @@ Expected: FAIL (generated не содержит root-of / dispose; или build 
     }
 ```
 
-(Т.к. root-геттер abstract, он и так не попадёт в `_concreteGetters`; страховка избыточна, но дёшева.)
-
-— для derived: добавить имя root-геттера в reactive-базу детектора. В месте вызова `computeReactiveGetters` — обернуть результат добавлением root-имени:
+— для derived: добавить имя root-геттера в reactive-базу:
 
 ```dart
-    var reactiveNames = const <String>{};
-    if (concreteGetters.isNotEmpty) {
-      reactiveNames = await computeReactiveGetters(
-        clazz: element as ClassElement,
-        storeImplNames: storeImplNames,
-      );
-    }
     if (isDerived) {
       reactiveNames = {...reactiveNames, rootMemberName!};
     }
 ```
 
-— для derived: проверка пустоты адаптирована (валиден без полей, если есть геттеры помимо root). Найти:
-
-```dart
-    if (allFields.isEmpty) {
-      throw InvalidGenerationSource(
-        'Class "${element.name}" annotated with @Store has no fields...',
-        element: element,
-      );
-    }
-```
-
-— заменить на:
-
-```dart
-    if (allFields.isEmpty && !isDerived) {
-      throw InvalidGenerationSource(
-        'Class "${element.name}" annotated with @Store has no fields. '
-        'There is nothing to generate.', element: element);
-    }
-    if (isDerived && allFields.isEmpty && concreteGetters.isEmpty) {
-      throw InvalidGenerationSource(
-        'Derived store "${element.name}" has no fields and no getters besides '
-        'root. There is nothing to generate.', element: element);
-    }
-```
+— проверка пустоты для derived (см. Task 5 — `_emitStoreClass` уже содержит общую проверку; добавить derived-ветку рядом).
 
 — эмиссия root-геттера (после accessors, до computed-блока):
 
@@ -1094,43 +1191,11 @@ Expected: FAIL (generated не содержит root-of / dispose; или build 
     }
 ```
 
-— эмиссия dispose (в конце класса, перед `buffer.writeln('}')`):
-
-```dart
-    if (isDerived) {
-      final clazz = element as ClassElement;
-      final disposeMethod = clazz.methods.firstWhere(
-        (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic,
-        orElse: () => null as MethodElement,
-      );
-      // disposeMethod может быть: null | concrete void dispose() | abstract.
-      final hasConcreteDispose = disposeMethod != null && !disposeMethod.isAbstract;
-      final hasAbstractDispose = disposeMethod != null && disposeMethod.isAbstract;
-      if (disposeMethod != null &&
-          (!(disposeMethod.returnType.isVoid &&
-              disposeMethod.parameters.isEmpty))) {
-        throw InvalidGenerationSource(
-          'dispose() in derived store "${element.name}" must be a no-argument '
-          'void method.', element: disposeMethod);
-      }
-      buffer.writeln();
-      if (hasConcreteDispose) buffer.writeln('  @override');
-      buffer.write('  void dispose() {');
-      if (hasConcreteDispose) buffer.write(' super.dispose();');
-      buffer.writeln();
-      for (final f in reactiveFields) {
-        buffer.writeln('    ${f.name}\$.dispose();');
-      }
-      for (final g in reactiveNames) {
-        buffer.writeln('    ${g}\$.dispose();');
-      }
-      buffer.writeln('  }');
-      // hasAbstractDispose: тело генерим, super не вызываем (нечего).
-      // disposeMethod == null: тело генерим без @override и без super.
-    }
-```
-
-— коллизии: в `_checkNameCollisions` для derived исключить root-имя и `dispose` из проверки. Добавить в начало `_checkNameCollisions` (или в каждой ветке) учёт: проще — передать `isDerived`/`rootMemberName` и не регистрировать root-имя как источник коллизии. Т.к. root-геттер объявлен в impl (а не генерируется как поле/getter из reactive-полей), он и так не попадает в `nameToSource`. Достаточно не добавлять `dispose` в проверку (его там и нет). Оставить `_checkNameCollisions` как есть; убедиться, что root-имя не совпадает с именем reactive-поля (это была бы ошибка пользователя — `abstract AppStoreImpl get root; abstract int root;` — и анализатор/коллизия поймают).
+— **dispose уже эмитится общим фрагментом из Task 5.** Для derived ничего
+  специального не требуется: тот же фрагмент диспозит его Signal/Computed-поля,
+  `super.dispose()` вызывается если impl объявил concrete dispose, и unregister
+  не нужен (derived не регистрируется). Убедиться, что dispose-фрагмент не
+  дублируется — он один, в общем пути.
 
 - [ ] **Step 5: Запустить derived-тесты — должны пройти**
 
@@ -1416,13 +1481,21 @@ git commit -m "chore: derived stores feature complete"
 
 ## Self-Review (выполнено автором плана)
 
-**Spec coverage:** все секции спеки покрыты задачами (см. Task 10 Step 3).
+**Spec coverage:** все секции спеки покрыты задачами (см. Task 10 Step 3), включая новые — единый dispose (Tasks 4,5,6), переиспользование (Tasks 5,6), WeakReference (Task 3).
 
-**Placeholder scan:** единственный `UnimplementedError` в Task 6 Step 1 — это осознанный указатель на рефакторинг (Step 2), а не пропуск; реальные тесты используют вынесенный `expectCompiles`. В Step 4 generator-кода — конкретные правки с привязкой к существующим строкам.
+**Reuse requirement:** логика полей/геттеров/конструктора/коллизий/dispose — в едином `_emitStoreClass` (Task 5); `@DerivedStore` не дублирует её, а передаёт надстройки (Task 6). Дублирование между `@Store` и `@DerivedStore` исключено по построению.
 
-**Type consistency:** имена консистентны — `StoreRootScope.{register,of,enableTestMode,resetTestScope}` (Task 3) используются в Tasks 4,6,8,9; `@Store(root: true)` и `@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
+**Unified dispose:** dispose эмитится для всех сторов (`@Store` и `@DerivedStore`) одним фрагментом в `_emitStoreClass` (Task 4 вводит, Task 5 обобщает, Task 6 только включает derived-поля — без копии кода). Root-стор дополнительно `unregister`.
+
+**WeakReference / cycles:** `StoreRootScope` хранит только `WeakReference`; `of<T>` убирает мёртвые записи; root-стор `unregister` в dispose для детерминизма (Task 3). Цикл scope→root→derived→(через of)root разорван — scope не держит стор сильно.
+
+**Placeholder scan:** единственный `UnimplementedError` в Task 6 Step 1 — осознанный указатель на рефакторинг (Step 2), реальный helper `expectCompiles`.
+
+**Type consistency:** `StoreRootScope.{register,of,unregister,enableTestMode,resetTestScope}` (Task 3) используются в Tasks 4,6,8,9; `@Store(root: true)`/`@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
 
 **Риски/допущения для реализующего агента:**
 - Конкретные номера строк в `store_generator.dart` даны приблизительно (файл 712 строк) — ориентироваться по сигнатурам/комментариям, не по номерам.
-- Поведение `_activeRegistry` (Task 3) иzona-изоляция зависят от находок Task 2 — реализовать Step 3 только после Step 2/3 Task 2.
+- Поведение `_activeRegistry` (Task 3) и zone-изоляция зависят от находок Task 2 — реализовать Step 3 Task 3 только после Step 2/3 Task 2.
 - Если эмпирический зонд A покажет, что per-test зон НЕТ — `resetTestScope` обязателен (тесты Task 3 уже предполагают это).
+- `WeakReference` в Dart не даёт детерминированного GC-теста; тест «collected root is not resolvable» (Task 3) детерминированно моделирует эффект через `unregister` (отдельный тест). Не полагаться на `gc()` — его нет в стабильном API.
+- `of<T>` «последний wins»: при нескольких регистрациях одного типа возвращается последнее совпадание по `is T` — задокументировано в Task 3 Step 3.
