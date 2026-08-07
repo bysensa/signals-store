@@ -93,7 +93,7 @@ abstract class ProjectsStoreImpl {
 > доходят до `computed`/`effect` (подтверждено минимальным тестом). Поэтому в
 > UseCase-мутациях коллекций `batch()` не используется — только для скалярных
 > полей. См. регрессионный тест `in-place MapSignal mutations ... fire reactive
-> updates` в `test/architecture_test.dart`.
+updates` в `test/architecture_test.dart`.
 
 ## Запуск
 

@@ -1,5 +1,7 @@
 // ignore_for_file: lines_longer_than_80_chars
 
+import 'dart:io';
+
 import 'package:build/build.dart';
 import 'package:build_test/build_test.dart';
 import 'package:package_config/package_config.dart';
@@ -269,9 +271,11 @@ import 'package:signals/signals.dart';
     );
   });
 
-  test('private abstract field → private signal field (underscore preserved)', () async {
-    // Приватное поле `_count` → приватное signal-поле `_count$`.
-    // Видимость наследуется от исходного поля.
+  test('private abstract field → private signal field, PUBLIC ctor param', () async {
+    // Приватное поле `_count` → приватное signal-поле `_count$` и приватные
+    // геттер/сеттер `_count`. Но параметр конструктора — ПУБЛИЧНЫЙ `count`
+    // (stripped-имя): Dart запрещает приватные имена в named-параметрах, не
+    // являющихся initializing-formal (`private_named_non_field_parameter`).
     final generated = await _run(
       packageConfig,
       headers,
@@ -291,8 +295,10 @@ import 'package:signals/signals.dart';
         contains("name: 'CounterStore._count'"),
         contains('int get _count => _count\$.value;'),
         contains('set _count(int value) => _count\$.value = value;'),
-        // Параметр конструктора — приватное имя.
-        contains('required int _count'),
+        // Параметр конструктора — ПУБЛИЧНОЕ имя (без `_`): Dart требует этого.
+        contains('required int count'),
+        // И НЕ приватное (это вызовет compile error).
+        isNot(contains('required int _count')),
       ]),
     );
   });
@@ -725,6 +731,54 @@ class Result {}
     );
   });
 
+  test('late final field initialized in user constructor body is preserved',
+      () async {
+    // `late final int f;` без inline-инициализатора может быть инициализирован
+    // в ТЕЛЕ пользовательского unnamed-конструктора суперкласса. Генератор не
+    // трогает late-поля и не объявляет свой super-вызов явно, поэтому подкласс
+    // неявно вызывает super() — тело конструктора суперкласса выполняется, и
+    // поле инициализируется. Это НЕ баг: ответственность за инициализацию
+    // late-поля лежит на пользователе (как и для обычного late). Regression
+    // guard: генератор не должен ломать этот паттерн.
+    final generated = await _run(
+      packageConfig,
+      headers,
+      '''
+      @Store(name: 'LazyInitStore')
+      abstract class LazyInitImpl {
+        late final int f;
+        abstract int count;
+        LazyInitImpl() {
+          f = 42;
+        }
+      }
+      ''',
+    );
+    expect(
+      generated,
+      allOf([
+        // Конструктор подкласса не вызывает super явно → неявный super()
+        // выполняет тело пользовательского конструктора.
+        contains('LazyInitStore({required int count})'),
+        isNot(contains('super.f')),
+        isNot(contains('super(')),
+      ]),
+    );
+    // И сгенерированный код компилируется (late final инициализируется через
+    // super() — тело ctor суперкласса).
+    await _expectCompiles(headers, '''
+@Store(name: 'LazyInitStore')
+abstract class LazyInitImpl {
+  late final int f;
+  abstract int count;
+  LazyInitImpl() {
+    f = 42;
+  }
+}
+
+$generated''');
+  });
+
   // --- Обобщённые параметры (generics) ---
 
   test('generic type params are carried over to declaration and extends', () async {
@@ -976,14 +1030,13 @@ final globalCount = signal(10);
       );
       // Именованные конструкторы запрещены → сборка падает с понятной ошибкой.
       expect(result.succeeded, false,
-          reason: 'C1: именованные конструкторы должны вызывать ошибку '
-              'кодогенерации');
+          reason: 'C1: named constructors must raise a codegen error');
       expect(result.errors, isNotEmpty);
       expect(
         result.errors.join('\n'),
         allOf([
-          contains('именованные конструкторы'),
-          contains('unnamed-конструктор'),
+          contains('named constructors'),
+          contains('unnamed constructor'),
         ]),
       );
       // Битый актив не генерируется.
@@ -1010,14 +1063,14 @@ final globalCount = signal(10);
       // У суперкласса нет unnamed-конструктора с параметром label → super.label
       // невалиден → сборка падает с понятной ошибкой.
       expect(result.succeeded, false,
-          reason: 'C4: concrete-поле без super-конструктора должно вызывать '
-              'ошибку кодогенерации');
+          reason: 'C4: a concrete field without a super constructor must raise '
+              'a codegen error');
       expect(result.errors, isNotEmpty);
       expect(
         result.errors.join('\n'),
         allOf([
           contains('label'),
-          contains('super-конструктор'),
+          contains('super constructor'),
         ]),
       );
       expect(
@@ -1050,7 +1103,7 @@ final globalCount = signal(10);
       expect(
         result.errors.join('\n'),
         allOf([
-          contains('Коллизия имён'),
+          contains('Name collision'),
           contains('sum'),
         ]),
       );
@@ -1083,7 +1136,7 @@ final globalCount = signal(10);
       expect(
         result.errors.join('\n'),
         allOf([
-          contains('Коллизия имён'),
+          contains('Name collision'),
           contains('sumRaw'),
         ]),
       );
@@ -1129,6 +1182,343 @@ final globalCount = signal(10);
       // Computed<int Function(int)> — корректно ли?
       expect(generated, contains('Computed<int Function(int)>'),
           reason: 'B2: computed-геттер с function type → Computed с function type');
+    });
+  });
+
+  // --- АУДИТ приватных полей: реальная компиляция сгенерированного кода ---
+  //
+  // Регрессия: до фикса приватные поля генерировали НЕкомпилируемый код
+  // (`private_named_non_field_parameter`, `super_formal_parameter_without_-
+  // associated_named`), но `contains`-матчеры этого не ловили — они проверяют
+  // подстроки, а не компилируемость. Эти тесты запускают `dart analyze` на
+  // реальном сгенерированном коде и требуют 0 ошибок.
+  group('audit: private field compilation', () {
+    // C-private-1: приватное abstract-поле → публичный параметр `count`,
+    // приватный signal `_count$`, приватные геттер/сеттер `_count`. Код должен
+    // компилироваться (раньше эмитил `required int _count` — незаконно).
+    test('C-private-1: private abstract field → compiling code', () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'CounterStore')
+      abstract class CounterImpl {
+        abstract int _count;
+      }
+      ''');
+      await _expectCompiles(headers, '''
+@Store(name: 'CounterStore')
+abstract class CounterImpl {
+  abstract int _count;
+}
+
+$generated''');
+    });
+
+    // C-private-2: приватное concrete-поле с ПОЗИЦИОННЫМ super-конструктором
+    // → `super(secret)` в initializer-list. Компилируется.
+    test('C-private-2: private concrete field (positional super) → compiling',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'HolderStore')
+      abstract class HolderImpl {
+        final int _secret;
+        HolderImpl(this._secret);
+      }
+      ''');
+      await _expectCompiles(headers, '''
+@Store(name: 'HolderStore')
+abstract class HolderImpl {
+  final int _secret;
+  HolderImpl(this._secret);
+}
+
+$generated''');
+    });
+
+    // C-private-3: приватное concrete-поле с ИМЕНОВАННЫМ super-конструктором
+    // → build error с понятным сообщением (Dart не раскрывает приватный named
+    // super-параметр подклассу — фундаментальное ограничение).
+    test('C-private-3: private concrete field (named super) → build error',
+        () async {
+      final result = await _runResult(packageConfig, headers, '''
+      @Store(name: 'HolderStore')
+      abstract class HolderImpl {
+        final int _secret;
+        HolderImpl({required this._secret});
+      }
+      ''');
+      expect(result.succeeded, false,
+          reason: 'C-private-3: a private concrete field with a named super '
+              'constructor must raise a codegen error');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('_secret'),
+          contains('POSITIONAL'),
+        ]),
+      );
+      expect(
+        result.readerWriter.testing.assets,
+        isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+      );
+    });
+
+    // C-private-4: приватное concrete-поле (позиционный super) + публичное
+    // concrete-поле (named super) в одном классе. Публичное → `required
+    // super.label`, приватное → `super(secret)`. Dart разрешает смешивать
+    // named super-параметр с явным `super(...)` вызовом для позиционных.
+    test('C-private-4: mixed public (named) + private (positional) concrete → '
+        'compiling', () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'MixedHolder')
+      abstract class MixedHolderImpl {
+        final String label;
+        final int _secret;
+        MixedHolderImpl(this._secret, {required this.label});
+      }
+      ''');
+      await _expectCompiles(headers, '''
+@Store(name: 'MixedHolder')
+abstract class MixedHolderImpl {
+  final String label;
+  final int _secret;
+  MixedHolderImpl(this._secret, {required this.label});
+}
+
+$generated''');
+    });
+
+    // C-private-5: коллизия stripped-имени. Публичное `count` и приватное
+    // `_count` оба порождают параметр конструктора `count` → build error.
+    test('C-private-5: public field + private field with same stripped name → '
+        'collision error', () async {
+      final result = await _runResult(packageConfig, headers, '''
+      @Store(name: 'CollideStore')
+      abstract class CollideImpl {
+        abstract int count;
+        abstract int _count;
+      }
+      ''');
+      expect(result.succeeded, false,
+          reason: 'C-private-5: count + _count должны коллизировать по '
+              'stripped-имени параметра `count`');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('Name collision'),
+          contains('count'),
+        ]),
+      );
+    });
+
+    // C-private-6: приватное concrete-поле с позиционным super-конструктором
+    // СМЕШАННОЕ с приватным abstract-полем — regression guard на的组合у.
+    test('C-private-6: private concrete + private abstract mixed → compiling',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'Combo')
+      abstract class ComboImpl {
+        final int _id;
+        abstract String _label;
+        ComboImpl(this._id);
+      }
+      ''');
+      await _expectCompiles(headers, '''
+@Store(name: 'Combo')
+abstract class ComboImpl {
+  final int _id;
+  abstract String _label;
+  ComboImpl(this._id);
+}
+
+$generated''');
+    });
+
+    // --- Аудит соседних сценариев приватных полей / конструкторов (0.4.4) ---
+
+    // E2: поле состоит только из подчёркиваний → нет публичной формы параметра.
+    // Должна быть понятная ошибка кодогенерации, а не битый код до форматтера.
+    test('E2: underscore-only field name → clear codegen error', () async {
+      final result = await _runResult(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        abstract int _;
+      }
+      ''');
+      expect(result.succeeded, false,
+          reason: 'E2: field "_" must raise a clear codegen error');
+      expect(result.errors, isNotEmpty);
+      expect(
+        result.errors.join('\n'),
+        allOf([
+          contains('underscore'),
+          contains('no public'),
+        ]),
+      );
+    });
+
+    // E3: двойное подчёркивание `__count` — stripped-имя должно снимать ВСЕ
+    // ведущие подчёркивания (`__count` → `count`), иначе остаётся приватное
+    // имя параметра → `private_named_non_field_parameter`. Проверяем компиляцию.
+    test('E3: double-underscore private field → public param, compiling',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        abstract int __count;
+      }
+      ''');
+      expect(generated, contains('required int count'));
+      expect(generated, contains('final Signal<int> __count\$'));
+      await _expectCompiles(headers, '''
+@Store(name: 'S')
+abstract class SImpl {
+  abstract int __count;
+}
+
+$generated''');
+    });
+
+    // E4 (критичный): два приватных concrete-поля с позиционным super-конструктором.
+    // Аргументы super(...) должны идти в ПОРЯДКЕ ОБЪЯВЛЕНИЯ формалов (`_b, _a`),
+    // а не в алфавитном порядке полей — иначе тихая перестановка значений.
+    test('E4: two private concrete positional fields → super args in formal order',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        final int _b;
+        final int _a;
+        SImpl(this._b, this._a);
+      }
+      ''');
+      // Параметры отсортированы по имени (a, b), но super(...) — в порядке
+      // формалов (_b → b, _a → a).
+      expect(generated, contains('super(b, a)'));
+      await _expectCompiles(headers, '''
+@Store(name: 'S')
+abstract class SImpl {
+  final int _b;
+  final int _a;
+  SImpl(this._b, this._a);
+}
+
+$generated''');
+    });
+
+    // --- Самодостаточные concrete-поля (0.4.4): inline-init и nullable ---
+
+    // V2-1: inline-инициализатор (`final x = 5;`, `int b = 5;`, `final int? c =
+    // null;`) — поле самодостаточно, значение задаётся объявлением в суперклассе.
+    // Генератор НЕ добавляет его в конструктор и НЕ требует super-формала.
+    test('V2-1: inline-initialized concrete fields are not constructor params',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        final int a = 5;
+        int b = 5;
+        final int? c = null;
+        abstract int count;
+      }
+      ''');
+      expect(
+        generated,
+        allOf([
+          // Только reactive-поле в конструкторе.
+          contains('S({required int count})'),
+          // Self-sufficient поля НЕ пробрасываются через super.
+          isNot(contains('super.a')),
+          isNot(contains('super.b')),
+          isNot(contains('super.c')),
+          // И НЕ оборачиваются в Signal.
+          isNot(contains('Signal<int> a')),
+        ]),
+      );
+      await _expectCompiles(headers, '''
+@Store(name: 'S')
+abstract class SImpl {
+  final int a = 5;
+  int b = 5;
+  final int? c = null;
+  abstract int count;
+}
+
+$generated''');
+    });
+
+    // V2-2: non-final nullable без инициализатора (`int? d;`, `List<int>? e;`) —
+    // Dart даёт null по умолчанию, поле компилируется без ctor. Пропускаем.
+    test('V2-2: non-final nullable field without initializer is skipped',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        int? d;
+        List<int>? e;
+        abstract int count;
+      }
+      ''');
+      expect(generated, contains('S({required int count})'));
+      expect(generated, isNot(contains('super.d')));
+      expect(generated, isNot(contains('super.e')));
+      await _expectCompiles(headers, '''
+@Store(name: 'S')
+abstract class SImpl {
+  int? d;
+  List<int>? e;
+  abstract int count;
+}
+
+$generated''');
+    });
+
+    // V2-3: `final int? e;` БЕЗ инициализатора — final требует установки (Dart
+    // не даёт default). По-прежнему отклоняется C4 (нужен initializing-formal).
+    test('V2-3: final nullable field without initializer → C4 error', () async {
+      final result = await _runResult(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        final int? e;
+        abstract int count;
+      }
+      ''');
+      expect(result.succeeded, false,
+          reason: 'V2-3: final field without initializer must raise C4');
+      expect(result.errors, isNotEmpty);
+      expect(result.errors.join('\n'), contains('cannot be forwarded'));
+    });
+
+    // V2-4: смешанный случай — self-sufficient поле + ctor-поле + reactive.
+    // Self-sufficient пропускается, ctor-поле пробрасывается через super.
+    test('V2-4: mixed self-sufficient + ctor concrete + reactive → compiling',
+        () async {
+      final generated = await _run(packageConfig, headers, '''
+      @Store(name: 'S')
+      abstract class SImpl {
+        final int a = 5;
+        final String label;
+        abstract int count;
+        SImpl({required this.label});
+      }
+      ''');
+      expect(
+        generated,
+        allOf([
+          contains('S({required int count, required super.label})'),
+          isNot(contains('super.a')),
+        ]),
+      );
+      await _expectCompiles(headers, '''
+@Store(name: 'S')
+abstract class SImpl {
+  final int a = 5;
+  final String label;
+  abstract int count;
+  SImpl({required this.label});
+}
+
+$generated''');
     });
   });
 }
@@ -1177,4 +1567,40 @@ Future<TestBuilderResult> _runResult(
     // Делаем скрытые part-выходы SharedPartBuilder читаемыми по логическому ID.
     flattenOutput: true,
   );
+}
+
+/// Проверяет, что сгенерированный код КОМПИЛИРУЕТСЯ, запуская `dart analyze`.
+///
+/// Это строгая проверка, которую `contains`-матчеры дать не могут: они ловят
+/// подстроки, но пропускают некомпилируемый код (как регрессия приватных полей —
+/// `required int _count` выглядел правильно, но нарушал
+/// `private_named_non_field_parameter`).
+///
+/// [headers] — импорты (аннотация + signals), [body] — полный исходник: декларация
+/// `@Store`-класса + сгенерированный подкласс в одной библиотеке (как part-file).
+/// Код пишется во временный файл в `lib/` (чтобы резолвились зависимости пакета),
+/// анализируется, файл удаляется. Допускаются warnings/info (например,
+/// `unused_element` для приватных полей) — важны только ERRORS.
+Future<void> _expectCompiles(String headers, String body) async {
+  final file = File('lib/_codegen_compile_check.dart');
+  await file.writeAsString('$headers\n$body');
+  try {
+    final result = await Process.run(
+      'dart',
+      // --no-fatal-warnings: warnings (unused_field, unused_element) не валидны
+      // для smoke-теста — нас интересуют только ERRORS (незаконный код).
+      ['analyze', file.path, '--no-fatal-warnings'],
+    );
+    expect(
+      result.exitCode,
+      0,
+      reason: 'Сгенерированный код должен компилироваться (0 ошибок), но '
+          '`dart analyze` завершился с кодом ${result.exitCode}:\n'
+          '--- stdout ---\n${result.stdout}\n'
+          '--- stderr ---\n${result.stderr}\n'
+          '--- проверяемый код ---\n$body',
+    );
+  } finally {
+    if (file.existsSync()) await file.delete();
+  }
 }

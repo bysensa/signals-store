@@ -19,11 +19,23 @@ import 'reactivity.dart';
 ///   областью видимости, что и исходное (публичное поле → `field$`, приватное
 ///   `_field` → `_field$`), типизированные геттер и сеттер, пробрасывающие
 ///   значение в/из сигнала. Запись/чтение автоматически подписывает эффекты
-///   (signals).
+///   (signals). Параметр конструктора для приватного поля публикуется под
+///   stripped-именем (`_count` → `count`): Dart запрещает приватные имена у
+///   named-параметров, не являющихся initializing-formal.
 /// - **concrete-поля** (`final X x;` или `X x;`) → пробрасываются как обычные
 ///   поля: принимаются параметром конструктора и инициализируются напрямую.
-///   Используются для вложенных сторов и прочих стабильных ссылок, которые
-///   НЕ должны быть реактивными на уровне корня.
+///   Публичное поле → `required super.x` (требует named initializing-formal
+///   `{required this.x}` в super-конструкторе). Приватное поле `_x` →
+///   Dart запрещает `super._x`, поэтому передаётся через явный `super(value)`
+///   в initializer-list (требует позиционного initializing-formal `this._x`;
+///   именованный приватный формал подклассу недоступен). **Самодостаточные
+///   concrete-поля** — с inline-инициализатором (`final int x = 5;`) или
+///   non-final nullable без инициализатора (`int? d;` → Dart даёт null) — НЕ
+///   пробрасываются и НЕ добавляются в конструктор: значение берётся из
+///   объявления поля в суперклассе. `late`-поля игнорируются (их инициализация
+///   — ответственность пользователя, в т.ч. через тело unnamed-конструктора).
+///   Используются для вложенных сторов и прочих стабильных ссылок, которые НЕ
+///   должны быть реактивными на уровне корня.
 ///
 /// **Обобщённые параметры и абстрактные сторы.** Type parameters
 /// аннотированного класса (`<T, R extends Result>`) переносятся на
@@ -77,9 +89,9 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       if (annotations.length > 1) {
         final name = element.name;
         throw InvalidGenerationSource(
-          'Класс «$name» помечен несколькими аннотациями @Store '
-          '(${annotations.length}). Допускается только одна аннотация @Store '
-          'на класс. Разнесите разные реализации по отдельным классам.',
+          'Class "$name" is annotated with multiple @Store annotations '
+          '(${annotations.length}). Only one @Store annotation is allowed per '
+          'class. Move each implementation into its own class.',
           element: element,
         );
       }
@@ -105,7 +117,8 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       final name = element.name;
       final kind = element.kind.displayName;
       throw InvalidGenerationSource(
-        '@Store применим только к классам, но найден $kind «$name».',
+        '@Store can only be applied to classes, but was found on $kind '
+        '"$name".',
         element: element,
       );
     }
@@ -122,12 +135,12 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     if (namedCtors.isNotEmpty) {
       final names = namedCtors.map((c) => c.name).join(', ');
       throw InvalidGenerationSource(
-        'Класс «${element.name}» объявляет именованные конструкторы ($names), '
-        'что не поддерживается @Store. Генератор создаёт unnamed-конструктор '
-        'автоматически, и этого достаточно — стор содержит только данные. '
-        'Именованные конструкторы не могут инициализировать abstract-поля '
-        '(Signal-поля). Удалите именованные конструкторы; для инициализации '
-        'concrete-полей используйте unnamed-конструктор.',
+        'Class "${element.name}" declares named constructors ($names), which '
+        'are not supported by @Store. The generator creates the unnamed '
+        'constructor automatically, and that is sufficient — a store holds only '
+        'data. Named constructors cannot initialize abstract (Signal) fields. '
+        'Remove the named constructors; to initialize concrete fields, use the '
+        'unnamed constructor.',
         element: element,
       );
     }
@@ -146,8 +159,8 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     final allFields = _allFields(element);
     if (allFields.isEmpty) {
       throw InvalidGenerationSource(
-        'Класс «${element.name}», помеченный @Store, не содержит полей. '
-        'Нечего генерировать.',
+        'Class "${element.name}" annotated with @Store has no fields. There is '
+        'nothing to generate.',
         element: element,
       );
     }
@@ -171,6 +184,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       // Abstract-поле всегда имеет имя; null возможен только у синтетических
       // безымянных элементов, которых здесь быть не может.
       final fieldName = f.name!;
+      // Имя ПАРАМЕТРА конструктора: для приватного поля `_count` — публичное
+      // `count` (Dart запрещает приватные named-параметры, не являющиеся
+      // initializing-formal). Для публичного — как есть.
+      final paramName = _ctorParamName(f);
       // Имя поля-сигнала наследует область видимости исходного поля: для
       // публичного `name` → `name$`, для приватного `_count` → `_count$`.
       // Просто добавляем суффикс `$` к имени — префикс `_` приватного поля
@@ -180,10 +197,12 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       // Поле-сигнал: `final Signal<String> name$;` (видимость — как у поля).
       signalFieldDecls.add('  final Signal<$typeStr> $signalField;');
 
-      // Параметр конструктора и инициализатор сигнала.
-      ctorParams.add('required $typeStr $fieldName');
+      // Параметр конструктора и инициализатор сигнала. Параметр публикуется под
+      // stripped-именем для приватных полей, но форвардит значение в приватный
+      // signal `_field$`.
+      ctorParams.add('required $typeStr $paramName');
       ctorInits.add(
-        '$signalField = Signal<$typeStr>($fieldName, '
+        '$signalField = Signal<$typeStr>($paramName, '
         "options: SignalOptions<$typeStr>(name: '$storeName.$fieldName'))",
       );
 
@@ -196,40 +215,133 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     }
 
     // Pass-through поля: принимаются конструктором и инициализируются напрямую
-    // в поле суперкласса (через `super.<field>` если возможно, иначе через
-    // super-конструктор). Здесь используем `super.field` — Dart поддерживает
-    // initializing-formal/super-параметр, который инициализирует поле
-    // суперкласса напрямую.
+    // в поле суперкласса.
+    //
+    // - **Публичное concrete-поле** → `required super.<field>`: Dart поддерживает
+    //   super-параметр, инициализирующий поле суперкласса напрямую. Требует
+    //   named initializing-formal `this.<field>` в unnamed-конструкторе базового
+    //   класса.
+    // - **Приватное concrete-поле** `_field` → Dart ЗАПРЕЩАЕТ `super._field`
+    //   (`super_formal_parameter_without_associated_named`), а также запрещает
+    //   приватные named-параметры, не являющиеся initializing-formal. Поэтому
+    //   приватное поле пробрасывается через ПУБЛИЧНЫЙ параметр (stripped-имя
+    //   `_field` → `field`) и ЯВНЫЙ вызов `super(<value>)` в initializer-list.
+    //   Для этого super-конструктор должен объявлять поле как ПОЗИЦИОННЫЙ
+    //   initializing-formal `this._field` (именованный приватный формал
+    //   недоступен подклассу — фундаментальное ограничение Dart).
     //
     // --- Валидация C4: super.x требует unnamed-конструктора суперкласса ---
-    // `required super.<field>` валиден, только если у unnamed generative-
-    // конструктора суперкласса есть initializing-formal параметр `this.<field>`.
-    // Без него — compile error у потребителя. Проверяем заранее и бросаем
-    // понятную ошибку вместо битого кода.
-    final superParams = element.unnamedConstructor?.formalParameters
-            .where((p) => p.isInitializingFormal && p.isRequiredNamed)
-            .map((p) => p.name)
-            .whereType<String>()
-            .toSet() ??
-        const <String>{};
+    // Для каждого concrete-поля unnamed-конструктор суперкласса должен иметь
+    // initializing-formal `this.<field>`. Для приватного поля дополнительно
+    // требуется, чтобы формал был ПОЗИЦИОННЫМ (не named). Без этого — compile
+    // error у потребителя. Проверяем заранее и бросаем понятную ошибку.
+    final superFormals = <String, FormalParameterElement>{};
+    // Позиционные формалы super-конструктора В ПОРЯДКЕ ОБЪЯВЛЕНИЯ (не по имени).
+    // Критично для E4: `super(a, b)` передаёт аргументы позиционно, поэтому
+    // порядок должен совпадать с порядком формалов `SImpl(this._b, this._a)`,
+    // а не с алфавитной сортировкой полей. Иначе — тихая перестановка значений.
+    final orderedPositionalFormals = <FormalParameterElement>[];
+    for (final p in element.unnamedConstructor?.formalParameters ??
+        const <FormalParameterElement>[]) {
+      if (p.isInitializingFormal) {
+        // Ключ — ИМЯ поля (оно же имя формала this.<field>). Для приватного
+        // поля `_secret` формал называется `this._secret`, имя — `_secret`.
+        superFormals[p.name!] = p;
+        if (!p.isNamed) orderedPositionalFormals.add(p);
+      }
+    }
+    // Имя поля → публичное имя параметра конструктора (для позиционного super).
+    // Заполняется при обходе plainFields (только приватные positional-поля).
+    final fieldToPositionalParam = <String, String>{};
     for (final f in plainFields) {
       final fieldName = f.name!;
-      if (!superParams.contains(fieldName)) {
+      // Самодостаточное concrete-поле (inline-init `final x = 5;` / `int b = 5;`,
+      // или non-final nullable без инициализатора `int? d;` → Dart даёт null)
+      // НЕ требует super-формала и НЕ добавляется в конструктор: значение
+      // задаётся объявлением поля в суперклассе, подкласс его просто наследует.
+      if (_isSelfSufficientField(f)) continue;
+      final typeStr = _typeStringFor(f.type, implToStoreName);
+      final formal = superFormals[fieldName];
+      if (formal == null) {
         throw InvalidGenerationSource(
-          'Concrete-поле «$fieldName» класса «${element.name}» не может быть '
-          'передано через super-конструктор: у суперкласса нет unnamed-'
-          'конструктора с параметром «this.$fieldName». Добавьте unnamed-'
-          'конструктор с initializing-formal параметром (например, '
-          '«${element.name}({required this.$fieldName})»), или сделайте поле '
-          'abstract (реактивным).',
+          'Concrete field "$fieldName" of class "${element.name}" cannot be '
+          'forwarded through the super constructor: the superclass has no '
+          'unnamed constructor with an initializing-formal parameter '
+          '"this.$fieldName". Add an unnamed constructor with an '
+          'initializing-formal (public field — named: '
+          '"${element.name}({required this.$fieldName})"; private field — '
+          'positional: "${element.name}(this.$fieldName)"), or make the field '
+          'abstract (reactive).',
           element: f,
         );
       }
-      // super-параметр: `required super.fieldName` пробрасывает значение
-      // в поле суперкласса без дополнительной логики. Тип берётся из объявления
-      // суперкласса, поэтому impl→implementation-переписывание здесь не нужно.
-      ctorParams.add('required super.$fieldName');
+      if (_isPrivateField(f)) {
+        // Приватное concrete-поле: Dart НЕ позволяет `super._private`. Требуем
+        // ПОЗИЦИОННЫЙ initializing-formal в super-конструкторе (именованный
+        // приватный формал подклассу недоступен).
+        if (formal.isNamed) {
+          throw InvalidGenerationSource(
+            'Concrete field "$fieldName" of class "${element.name}" is private, '
+            'and the super constructor declares it as a NAMED '
+            'initializing-formal "{required this.$fieldName}". Dart does not '
+            'allow a subclass to pass a private named value to the super '
+            'constructor (`super_formal_parameter_without_associated_named`). '
+            'Make the parameter POSITIONAL: "${element.name}(this.$fieldName);", '
+            'or rename the field to public (drop the `_` prefix), or make it '
+            'abstract (reactive).',
+            element: f,
+          );
+        }
+        // Публичный параметр подкласса → позиционная передача в super-конструктор.
+        final paramName = _ctorParamName(f);
+        ctorParams.add('required $typeStr $paramName');
+        fieldToPositionalParam[fieldName] = paramName;
+      } else {
+        // Публичное поле: `required super.fieldName` пробрасывает значение
+        // в поле суперкласса без дополнительной логики. Тип берётся из объявления
+        // суперкласса, поэтому impl→implementation-переписывание здесь не нужно.
+        //
+        // `super.fieldName` как named-параметр требует, чтобы formal в
+        // super-конструкторе был ИМЕНОВАННЫМ (`{required this.fieldName}`).
+        // Позиционный formal (`this.fieldName`) не раскрывает named super-param
+        // подклассу (`super_formal_parameter_without_associated_named`).
+        if (!formal.isNamed) {
+          throw InvalidGenerationSource(
+            'Concrete field "$fieldName" of class "${element.name}" is declared '
+            'in the super constructor as a POSITIONAL initializing-formal '
+            '"this.$fieldName", but the generator emits '
+            '`required super.$fieldName` (a named super parameter) — this is '
+            'only valid for a named formal. Make the parameter NAMED: '
+            '"${element.name}({required this.$fieldName});", or make the field '
+            'abstract (reactive).',
+            element: f,
+          );
+        }
+        ctorParams.add('required super.$fieldName');
+      }
     }
+
+    // Формируем позиционные аргументы super(...) В ПОРЯДКЕ ОБЪЯВЛЕНИЯ формалов
+    // super-конструктора (E4). Каждый позиционный формал super-конструктора,
+    // соответствующий concrete-полю стора, получает значение своего параметра.
+    // Позиционный формал, НЕ соответствующий полю стора (например, лишний
+    // `this.extra` без поля `extra`), не может быть передан — валидируем это.
+    final positionalSuperArgs = <String>[
+      for (final formal in orderedPositionalFormals)
+        if (fieldToPositionalParam.containsKey(formal.name))
+          fieldToPositionalParam[formal.name]!
+        else
+          throw InvalidGenerationSource(
+            'The super constructor of "${element.name}" declares a positional '
+            'initializing-formal "this.${formal.name}", but the class has no '
+            'concrete field named "${formal.name}". Every positional '
+            'initializing-formal of the super constructor must correspond to a '
+            'concrete field of the @Store class (positional super arguments '
+            'cannot be skipped). Add the field "${formal.name}", or make the '
+            'formal named.',
+            element: element,
+          ),
+    ];
 
     // Computed-геттеры: concrete getters (с телом), которые ссылаются на
     // реактивные свойства стора. Детектор (см. reactivity.dart) определяет,
@@ -313,11 +425,21 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       ..writeln('$classKeyword $storeName$declParams extends '
           '$superName$superArgs {');
 
-    // Конструктор: super-параметры (concrete) идут как `super.x`,
-    // реактивные — с явным инициализатором сигнала.
+    // Конструктор: публичные concrete-поля идут как `super.x`, приватные
+    // concrete-поля — через явный `super(<values>)` в initializer-list (Dart
+    // запрещает `super._private`), реактивные — с явным инициализатором сигнала.
+    //
+    // Порядок в initializer-list: `super(...)` должен идти ПОСЛЕДНИМ (Dart требует,
+    // чтобы super-вызов был последним в initializer-list — `super_invocation_not_
+    // last`). Signal-инициализаторы полей текущего класса идут перед ним.
+    final allInits = <String>[
+      ...ctorInits,
+      if (positionalSuperArgs.isNotEmpty)
+        'super(${positionalSuperArgs.join(', ')})',
+    ];
     buffer
       ..write('  $storeName({${ctorParams.join(', ')}})')
-      ..write(ctorInits.isEmpty ? ';' : ' : ${ctorInits.join(', ')};')
+      ..write(allInits.isEmpty ? ';' : ' : ${allInits.join(', ')};')
       ..writeln();
 
     // Поля-сигналы (только реактивные).
@@ -356,6 +478,9 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
   /// - abstract-поле `sum` → Signal `sum$`, getter/setter `sum`;
   /// - reactive getter `sum` → Computed `sum$`, getter `sum`, raw `sumRaw`;
   /// - concrete-поле `x` → `super.x` (имя не эмитится, но участвует в контракте).
+  /// - приватное поле `_count` → публичный ПАРАМЕТР конструктора `count`
+  ///   (stripped-имя): конфликтует с публичным полем `count`, дающим тот же
+  ///   параметр `count` в том же конструкторе.
   ///
   /// Если два источника порождают одно имя (например, abstract-поле `sum` и
   /// getter `sum` оба → `sum$` и `sum`), потребитель получит compile error
@@ -375,28 +500,45 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       final existing = nameToSource[name];
       if (existing != null) {
         throw InvalidGenerationSource(
-          'Коллизия имён в «$storeName»: $source и $existing создают одно и '
-          'то же имя «$name». Переименуйте одно из них (например, поле или '
-          'геттер), чтобы избежать дублирования в сгенерированном коде.',
+          'Name collision in "$storeName": $source and $existing both produce '
+          'the same name "$name". Rename one of them (for example, a field or '
+          'a getter) to avoid duplication in the generated code.',
           element: sourceElement,
         );
       }
       nameToSource[name] = source;
     }
 
-    // Abstract-поля: signal-поле `<name>$` + getter/setter `<name>`.
+    // Abstract-поля: signal-поле `<name>$` + getter/setter `<name>`. Для
+    // приватного поля дополнительно регистрируем stripped-имя параметра
+    // конструктора (`_count` → `count`): оно публично и конфликтует с любым
+    // публичным полем `count`. Публичное поле отдельно не регистрируем — его
+    // параметр и геттер это один контракт (имя совпадает намеренно).
     for (final f in reactiveFields) {
       final fieldName = f.name!;
-      checkName(fieldName, 'abstract-поле «$fieldName» (геттер/сеттер)', f);
-      checkName('$fieldName\$', 'abstract-поле «$fieldName» (Signal-поле)', f);
+      checkName(fieldName, 'abstract field "$fieldName" (getter/setter)', f);
+      checkName('$fieldName\$', 'abstract field "$fieldName" (Signal field)', f);
+      if (_isPrivateField(f)) {
+        final paramName = _ctorParamName(f);
+        checkName(paramName, 'constructor parameter "$paramName" '
+            '(private field "$fieldName")', f);
+      }
     }
 
     // Concrete-поля: имя участвует в контракте (super.x), но не эмитится как
     // поле. Всё равно проверяем на коллизию с computed-именами (геттер с тем
-    // же именем породит конфликт override).
+    // же именем породит конфликт override). Для приватного поля дополнительно —
+    // stripped-имя параметра (как у abstract).
     for (final f in plainFields) {
       final fieldName = f.name!;
-      checkName(fieldName, 'concrete-поле «$fieldName» (super-параметр)', f);
+      checkName(fieldName, 'concrete field "$fieldName" (super parameter)', f);
+      // Самодостаточное поле не создаёт параметра конструктора — stripped-имя
+      // параметра для него регистрировать не нужно (нет коллизии параметра).
+      if (_isPrivateField(f) && !_isSelfSufficientField(f)) {
+        final paramName = _ctorParamName(f);
+        checkName(paramName, 'constructor parameter "$paramName" '
+            '(private field "$fieldName")', f);
+      }
     }
 
     // Concrete-геттеры: getter `<name>`; для reactive — Computed `<name>$` и
@@ -404,10 +546,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     for (final g in concreteGetters) {
       final getterName = g.name!;
       if (reactiveNames.contains(getterName)) {
-        checkName('$getterName\$', 'computed-геттер «$getterName» (Computed-поле)', g);
-        checkName('${getterName}Raw', 'computed-геттер «$getterName» (raw-геттер)', g);
+        checkName('$getterName\$', 'computed getter "$getterName" (Computed field)', g);
+        checkName('${getterName}Raw', 'computed getter "$getterName" (raw getter)', g);
       }
-      checkName(getterName, 'геттер «$getterName»', g);
+      checkName(getterName, 'getter "$getterName"', g);
     }
   }
 
@@ -506,5 +648,59 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       }
     }
     return type.getDisplayString();
+  }
+
+  /// Имя параметра конструктора, который принимает значение поля.
+  ///
+  /// Для публичного поля — как есть. Для приватного `_count` — публичное `count`
+  /// (без префикса `_`): Dart запрещает приватные имена у named-параметров,
+  /// не являющихся initializing-formal (`private_named_non_field_parameter`), и
+  /// запрещает `super._private` даже в той же библиотеке. Поэтому сгенерированный
+  /// конструктор принимает ЗДЕСЬ публичное имя и форвардит значение в приватный
+  /// signal/геттер/сеттер (или позиционный super-конструктор).
+  ///
+  /// Signal-поле, геттер и сеттер при этом остаются приватными (`_count$`, `_count`)
+  /// — приватность исходного поля сохраняется в контракте стора.
+  ///
+  /// Снимаются ВСЕ ведущие подчёркивания (`__count` → `count`, не `_count`) —
+  /// иначе оставшееся приватное имя снова нарушит `private_named_non_field_parameter`.
+  /// Результат обязан быть валидным публичным идентификатором: непустым и не
+  /// начинающимся с `_`. Поле `_` или `__` (только подчёркивания) — дегенеративное
+  /// имя без публичной формы → понятная ошибка кодогенерации.
+  String _ctorParamName(FieldElement f) {
+    final name = f.name!;
+    final stripped = name.replaceFirst(RegExp(r'^_+'), '');
+    if (stripped.isEmpty) {
+      throw InvalidGenerationSource(
+        'Field "$name" consists only of underscores and has no public '
+        'constructor-parameter form. Rename it to a field with a non-underscore '
+        'suffix (e.g. "_count").',
+        element: f,
+      );
+    }
+    return stripped;
+  }
+
+  /// Приватное ли поле (имя начинается с `_` — library-private в Dart).
+  bool _isPrivateField(FieldElement f) => f.name!.startsWith('_');
+
+  /// Самодостаточное concrete-поле: не требует параметра конструктора и не
+  /// пробрасывается через super-формал — его значение задаётся в объявлении
+  /// поля суперкласса, а подкласс его просто наследует.
+  ///
+  /// Два случая (вариант 2):
+  /// - **inline-инициализатор**: `final int x = 5;`, `int b = 5;`,
+  ///   `final int? c = null;` — значение задано явно.
+  /// - **non-final nullable без инициализатора**: `int? d;` — Dart
+  ///   автоматически инициализирует в `null`, поле компилируется и без ctor.
+  ///
+  /// Исключения: `final` без инициализатора (`final int? e;`) — требует
+  /// установки (Dart не даёт default), поэтому НЕ самодостаточно и валидируется
+  /// C4. `late`/`static` исключены из `_allFields` заранее, здесь не встречаются.
+  bool _isSelfSufficientField(FieldElement f) {
+    if (f.hasInitializer) return true;
+    final isNullable =
+        f.type.nullabilitySuffix == NullabilitySuffix.question;
+    return isNullable && !f.isFinal;
   }
 }

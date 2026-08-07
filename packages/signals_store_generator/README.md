@@ -1,29 +1,42 @@
 # signals_store_generator
 
-Генератор кода для [`signals_store_annotation`](../signals_store_annotation).
-Превращает `abstract`-класс, помеченный аннотацией [`@Store`][Store], в
-конкретный класс с реактивными (`signals`-бэкенд) полями и вычисляемыми
-(computed) геттерами.
+Code generator for [`signals_store_annotation`](../signals_store_annotation).
+Turns an `abstract` class annotated with [`@Store`][Store] into a concrete class
+with reactive (`signals`-backed) fields and computed (derived) getters.
 
-## Что делает генератор
+## What the generator does
 
-Для аннотации `@Store(name: ...)` на `abstract`-классе создаётся единственный
-класс-наследник. Члены класса обрабатываются по трём категориям:
+For a `@Store(name: ...)` annotation on an `abstract` class it creates a single
+subclass. Class members are processed in three categories:
 
-- **`abstract`-поля** (реактивные) — заменяются на `Signal`-бэкенд: поле
-  `<field>$` с той же областью видимости, что и исходное (публичное поле →
-  `field$`, приватное `_field` → `_field$`), конструктор с `required`-параметром
-  и типизированные геттер/сеттер, пробрасывающие значение в/из сигнала.
-  Чтение/запись автоматически подписывает эффекты (signals).
-- **concrete-поля** (`final X x;` или `X x;`, pass-through) — пробрасываются
-  как `required super.x`-параметр конструктора без `Signal`-обёртки. Это
-  стабильные ссылки (например, вложенные сторы), которые не должны быть
-  реактивными на уровне корня.
-- **concrete-геттеры** (с телом) — если тело ссылается на реактивное состояние
-  (поля, подсторы, `Signal`-коллекции, другие reactive-геттеры, или чтение
-  `.value` на любом `Signal`-типе), геттер становится `Computed`-бэкенд: ленивое
-  мемоизированное значение, автоматически пересчитываемое при изменении
-  зависимостей. Геттеры без реактивных ссылок остаются обычными.
+- **`abstract` fields** (reactive) — replaced with a `Signal` backend: a
+  `<field>$` field with the same visibility as the source (public field →
+  `field$`, private `_field` → `_field$`), plus typed getter and setter that
+  forward the value to/from the signal. The constructor parameter for a private
+  field is published under its public (stripped) name — `_field` → `field`:
+  Dart forbids private names on named parameters that are not
+  initializing-formals. Reads/writes automatically subscribe effects (signals).
+- **concrete fields** (`final X x;` or `X x;`, pass-through) — forwarded without
+  a `Signal` wrapper. A public field → `required super.x` (requires a named
+  initializing-formal `{required this.x}` in the super constructor). A private
+  field `_x` is forwarded via an explicit `super(value)` in the initializer list
+  (requires a positional initializing-formal `this._x`; a named private formal
+  is not accessible to the subclass — a Dart limitation). These are stable
+  references (for example, nested stores) that should not be reactive at the
+  root level. **Self-sufficient concrete fields** are not forwarded at all and
+  are not added to the constructor: a field with an inline initializer
+  (`final int x = 5;`, `int b = 5;`) or a non-final nullable field without an
+  initializer (`int? d;`, which Dart defaults to `null`) takes its value from
+  the field declaration, and the generated subclass simply inherits it. A
+  `late` field initialized in the body of the user-declared unnamed constructor
+  is likewise preserved (the subclass calls `super()` implicitly, so the
+  constructor body runs); initializing `late` fields is the user's
+  responsibility, as for any `late`.
+- **concrete getters** (with a body) — if the body references reactive state
+  (fields, substores, `Signal` collections, other reactive getters, or reads
+  `.value` on any `Signal` type), the getter becomes a `Computed` backend: a
+  lazily memoized value that recomputes automatically when its dependencies
+  change. Getters with no reactive references remain plain.
 
 ```dart
 @Store(name: 'CounterStore')
@@ -32,7 +45,7 @@ abstract class CounterImpl {
 }
 ```
 
-превращается (после `build_runner`) в:
+turns into (after `build_runner`):
 
 ```dart
 class CounterStore extends CounterImpl {
@@ -51,10 +64,10 @@ class CounterStore extends CounterImpl {
 }
 ```
 
-### Computed-геттеры
+### Computed getters
 
-Concrete-геттер (геттер с телом), который читает реактивное состояние,
-автоматически становится вычисляемым (`Computed`):
+A concrete getter (a getter with a body) that reads reactive state
+automatically becomes computed (`Computed`):
 
 ```dart
 @Store(name: 'CounterStore')
@@ -62,16 +75,16 @@ abstract class CounterImpl {
   abstract int a;
   abstract int b;
 
-  int get sum => a + b;            // читает reactive a, b → Computed
-  int get hundred => 100;          // нет reactive-ссылок → остаётся обычным
+  int get sum => a + b;            // reads reactive a, b → Computed
+  int get hundred => 100;          // no reactive refs → stays plain
 }
 ```
 
-генерирует для `sum`:
+generates for `sum`:
 
 ```dart
 class CounterStore extends CounterImpl {
-  // ... signal-поля a$, b$ ...
+  // ... signal fields a$, b$ ...
 
   late final Computed<int> sum$ = computed(
     () => sumRaw,
@@ -79,33 +92,33 @@ class CounterStore extends CounterImpl {
   );
 
   @override
-  int get sum => sum$.value;        // мемоизировано, реактивно
+  int get sum => sum$.value;        // memoized, reactive
   @override
-  int get sumRaw => super.sum;      // сырой пересчёт (escape-hatch)
+  int get sumRaw => super.sum;      // raw recomputation (escape-hatch)
 }
 ```
 
-- `sum` — реактивный: читает кэш `Computed`, пересчитывается при изменении
-  `a`/`b`, подписывает эффекты (`Watch`, `effect`).
-- `sum$` — сам объект `Computed` (для подписки, `.recompute()`).
-- `sumRaw` — сырой пересчёт без мемоизации (escape-hatch для геттеров с
-  не-reactive зависимостями вроде `DateTime.now()`).
+- `sum` — reactive: reads the `Computed` cache, recomputes when `a`/`b` change,
+  subscribes effects (`Watch`, `effect`).
+- `sum$` — the `Computed` object itself (for subscription, `.recompute()`).
+- `sumRaw` — raw recomputation without memoization (escape-hatch for getters
+  with non-reactive dependencies like `DateTime.now()`).
 
-Реактивность определяется по типам, а не по именам: геттер считается reactive,
-если его тело упоминает abstract-поле, подстор (`@Store` impl), `Signal`-коллекцию
-(`MapSignal`, `ListSignal`, ...), класс с `Signal`-полями (каскад любой глубины),
-другой reactive-геттер/метод, или читает `.value`/`.length`/`[]`/`.where()` на
-любом `Signal`-типе (включая глобальные signal-переменные). Чистые мутации
-(`sig.value = x` без чтения) и untracked-доступы (`.peek()`) реактивностью не
-считаются.
+Reactivity is determined by types, not names: a getter is considered reactive if
+its body references an abstract field, a substore (`@Store` impl), a `Signal`
+collection (`MapSignal`, `ListSignal`, ...), a class with `Signal` fields
+(cascade of any depth), another reactive getter/method, or reads
+`.value`/`.length`/`[]`/`.where()` on any `Signal` type (including global signal
+variables). Pure mutations (`sig.value = x` without a read) and untracked
+accesses (`.peek()`) do not count as reactive.
 
-## Установка
+## Installation
 
 ```yaml
 dependencies:
   signals: ^7.0.0
   signals_store_annotation:
-    path: ../../packages/signals_store_annotation   # или git/url
+    path: ../../packages/signals_store_annotation   # or git/url
 
 dev_dependencies:
   signals_store_generator:
@@ -113,10 +126,10 @@ dev_dependencies:
   build_runner: ^2.4.0
 ```
 
-## Использование
+## Usage
 
-1. Опишите стор как `abstract`-класс с `abstract`-полями и пометьте его
-   единственной аннотацией `@Store`:
+1. Describe the store as an `abstract` class with `abstract` fields and annotate
+   it with a single `@Store` annotation:
 
    ```dart
    import 'package:signals/signals.dart';
@@ -131,33 +144,32 @@ dev_dependencies:
    }
    ```
 
-2. Запустите генератор:
+2. Run the generator:
 
    ```sh
    dart run build_runner build
-   # для Flutter-проектов: flutter pub run build_runner build
+   # for Flutter projects: flutter pub run build_runner build
    ```
 
-3. Используйте сгенерированный класс — поля реактивны через `signals`:
+3. Use the generated class — fields are reactive via `signals`:
 
    ```dart
    final store = CounterStore(count: 0, name: 'demo');
 
    effect(() => print('count = ${store.count}'));
-   store.count = 5; // печатает "count = 5"
+   store.count = 5; // prints "count = 5"
    ```
 
-## Типы полей
+## Field types
 
-Поддерживаются любые типы полей, разрешаемые анализатором, включая
-nullable (`int?`) и дженерики (`List<String>`). Тип сохраняется в сигнале как
-есть — статическая типизация полей сохраняется.
+Any field type resolvable by the analyzer is supported, including nullable
+(`int?`) and generics (`List<String>`). The type is preserved in the signal as
+is — static typing of fields is retained.
 
-## Вложенные сторы
+## Nested stores
 
-Для построения глобального дерева состояния (как в [overmind]) один стор может
-содержать другой как concrete-поле, типизированное суперклассом-описанием
-вложенного стора:
+To build a global state tree (like [overmind]) one store may contain another as a
+concrete field typed by the description superclass of the nested store:
 
 ```dart
 @Store(name: 'SessionStore')
@@ -168,31 +180,30 @@ abstract class SessionStoreImpl {
 
 @Store(name: 'AppStore')
 abstract class AppStoreImpl {
-  // Concrete-поле — стабильно, не реактивно на корне. Его собственные
-  // abstract-поля реактивны через свои сигналы.
+  // Concrete field — stable, not reactive at the root. Its own abstract fields
+  // are reactive through their own signals.
   final SessionStoreImpl session;
 
-  // Реактивное поле — обёрнуто в Signal.
+  // Reactive field — wrapped in a Signal.
   abstract bool isBusy;
 
   AppStoreImpl({required this.session});
 }
 ```
 
-Генератор автоматически переписывает тип concrete-поля `SessionStoreImpl` →
-`SessionStore` (имя реализации), чтобы потребитель работал с типизированным
-подстором, чьи поля реактивны.
+The generator automatically rewrites the concrete field type
+`SessionStoreImpl` → `SessionStore` (the implementation name), so the consumer
+works with a typed substore whose fields are reactive.
 
 [overmind]: https://overmindjs.org
 
-## Поведение при ошибках
+## Error behavior
 
-- `@Store` на не-классе (например, `const value = 42;`) → ошибка кодогенерации:
-  `@Store применим только к классам`.
-- `@Store` на классе без полей → ошибка: `... не содержит полей. Нечего
-  генерировать.`
-- Несколько аннотаций `@Store` на одном классе → ошибка: `... помечен
-  несколькими аннотациями @Store`. Разнесите разные реализации по отдельным
-  классам.
+- `@Store` on a non-class (for example, `const value = 42;`) → codegen error:
+  ``@Store can only be applied to classes``.
+- `@Store` on a class with no fields → error: ``... has no fields. There is
+  nothing to generate.``
+- Multiple `@Store` annotations on one class → error: ``... is annotated with
+  multiple @Store annotations``. Move each implementation into its own class.
 
 [Store]: ../signals_store_annotation/lib/src/annotations.dart

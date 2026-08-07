@@ -1,3 +1,63 @@
+## 0.4.4
+
+- **Feature (self-sufficient concrete fields)**: concrete fields with an inline
+  initializer (`final int x = 5;`, `int b = 5;`, `final int? c = null;`) and
+  non-final nullable fields without an initializer (`int? d;`, `List<int>? e;`,
+  which Dart defaults to `null`) no longer require an initializing-formal in
+  the super constructor. They are not added to the generated constructor and
+  not forwarded through `super` — their value comes from the field declaration
+  in the superclass, which the generated subclass simply inherits. Previously
+  these were rejected by the C4 validation ("cannot be forwarded through the
+  super constructor"). A `final` field with no initializer (e.g. `final int? e;`)
+  still requires an initializing-formal (Dart gives it no default), so it is
+  still validated by C4.
+- **Docs (late fields)**: a `late` field initialized in the body of the
+  user-declared unnamed constructor (`SImpl() { f = 42; }`) is preserved — the
+  generated subclass calls `super()` implicitly, so the constructor body runs.
+  Initialization of `late` fields is the user's responsibility, as for any
+  `late`. Added a regression test proving the generator does not break this
+  pattern.
+- **Bugfix (positional super argument order — silent data swap)**: with two or
+  more private concrete fields forwarded through a positional super constructor
+  (`SImpl(this._b, this._a)`), the generator passed `super(...)` arguments in
+  *field-name-sorted* order (`super(a, b)`) instead of the super constructor's
+  *formal-declaration* order (`super(b, a)`). Because the parameter types match,
+  this compiled silently and swapped the values at runtime. The generator now
+  collects positional super arguments in the formal-declaration order. It also
+  rejects a positional super formal that has no matching concrete field.
+- **Bugfix (multi-underscore private fields)**: the constructor parameter name
+  for a private field stripped only ONE leading underscore, so `__count`
+  produced the still-private parameter `_count` and re-triggered
+  `private_named_non_field_parameter`. All leading underscores are now stripped
+  (`__count` → `count`).
+- **Bugfix (underscore-only field)**: a field consisting only of underscores
+  (`abstract int _;`) previously produced an empty constructor parameter name
+  and reached the source formatter with unparseable code. It now fails with a
+  descriptive codegen error asking to rename the field.
+- **i18n**: all user-facing `InvalidGenerationSource` error messages and the
+  README are now in English (the package targets an international pub.dev
+  audience). Code comments remain in Russian.
+- **Bugfix (private fields)**: code generated for private fields
+  (`abstract int _count;`, `final int _secret;`) previously did not compile.
+  Dart forbids private names on named parameters that are not
+  initializing-formals (`private_named_non_field_parameter`) and forbids
+  `super._private` (`super_formal_parameter_without_associated_named`) — even
+  within the same library. The generator emitted exactly these illegal forms
+  but the existing tests missed it because they only used `contains` matchers
+  and never compiled the result. A private field `_field` now produces a
+  private signal/getter/setter (`_field$`, `_field`) but a **public**
+  constructor parameter `field` (underscore stripped) that forwards the value.
+  Private concrete fields with a positional super-constructor are now supported
+  (`super(value)` in the initializer list, required to be last); private
+  concrete fields with a named super-constructor (`{required this._x}`) are
+  rejected with a descriptive error — Dart fundamentally does not expose a
+  private named super-parameter to the subclass. The C4 validation now also
+  rejects public concrete fields declared as positional initializing-formals
+  (`this.x`) — `required super.x` requires a named formal. Added tests that
+  actually compile the generated code via `dart analyze` (not just
+  `contains` matchers), plus collision detection for the stripped parameter
+  name (`count` + `_count` now collide).
+
 ## 0.4.3
 
 - **Bugfix (name collisions)**: a getter whose name collides with an abstract
