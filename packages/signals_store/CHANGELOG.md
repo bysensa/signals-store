@@ -1,3 +1,7 @@
+## 0.2.1
+
+- **Docs**: translated the README to English. No behavioral changes.
+
 ## 0.2.0
 
 - Bumps `signals_store_annotation` to `^0.2.0` (adds the `abstract` flag used by

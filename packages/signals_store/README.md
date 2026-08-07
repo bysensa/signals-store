@@ -1,21 +1,21 @@
 # signals_store
 
-Reactive store на базе пакета [`signals`](https://pub.dev/packages/signals) v7.
-Превращает `abstract`-поля класса в реактивные сигналы через перехват
-`noSuchMethod` — без бойлерплейта, с полной статической типизацией.
+A reactive store built on the [`signals`](https://pub.dev/packages/signals)
+package v7. Turns a class's `abstract` fields into reactive signals by
+intercepting `noSuchMethod` — no boilerplate, with full static typing.
 
-## Установка
+## Installation
 
 ```yaml
 dependencies:
   signals_store:
-    path: ../../packages/signals_store  # или git/url
+    path: ../../packages/signals_store  # or git/url
 ```
 
-## Быстрый старт
+## Quick start
 
-`ReactiveStore` поставляется публичным barrel-файлом пакета, `effect` —
-пакетом `signals`.
+`ReactiveStore` is exposed through the package's public barrel file; `effect`
+comes from the `signals` package.
 
 ```dart
 import 'package:signals_store/signals_store.dart'; // ReactiveStore
@@ -36,17 +36,17 @@ class CounterStore extends _CounterImpl with ReactiveStore {
 void main() {
   final store = CounterStore(count: 0, name: 'demo');
 
-  // Запись и чтение — реактивные через signals.
+  // Writes and reads are reactive via signals.
   store.count = 5;
   print(store.count); // 5
 
-  // Подписка через signals API:
-  effect(() => print('count изменился: ${store.count}'));
-  store.count = 10; // печатает "count изменился: 10"
+  // Subscribe via the signals API:
+  effect(() => print('count changed: ${store.count}'));
+  store.count = 10; // prints "count changed: 10"
 }
 ```
 
-Во Flutter вызывайте `dispose()` из `State.dispose()`:
+In Flutter, call `dispose()` from `State.dispose()`:
 
 ```dart
 class _MyWidgetState extends State<MyWidget> {
@@ -54,92 +54,91 @@ class _MyWidgetState extends State<MyWidget> {
 
   @override
   void dispose() {
-    store.dispose(); // обязательно!
+    store.dispose(); // mandatory!
     super.dispose();
   }
 }
 ```
 
-## Типобезопасность
+## Type safety
 
-Поля **полностью типизированы статически**. `abstract int count` задаёт
-типизированные геттер и сеттер, поэтому компилятор проверяет и чтение,
-и запись:
+Fields are **fully statically typed**. `abstract int count` declares a typed
+getter and setter, so the compiler checks both reads and writes:
 
 ```dart
 final int c = store.count;   // OK
 store.count = 'oops';        // ❌ compile error: invalid_assignment
 ```
 
-Дополнительно: абстрактный геттер выполняет implicit cast возвращаемого
-значения к объявленному типу — это даёт **рантайм type-check** бесплатно,
-даже если значение записано через нетипизированный путь (сериализатор,
-reflection-маппер).
+Additionally, the abstract getter performs an implicit cast of the returned
+value to the declared type — this gives a **runtime type-check** for free, even
+if the value was written through an untyped path (a serializer, a reflection
+mapper).
 
 ## Limitations
 
-### 1. Кэш нормализации символов
+### 1. Symbol-normalization cache
 
-`ReactiveStore` кэширует результат нормализации `Symbol` глобально, с ключом
-по `runtimeType`. Это детерминировано и оптимально для прод-приложений, но:
+`ReactiveStore` caches the result of `Symbol` normalization globally, keyed by
+`runtimeType`. This is deterministic and optimal for production apps, but:
 
-- **Переопределение `runtimeType`** в подклассе не поддерживается — кэш может
-  сломаться или слить записи разных типов. Не переопределяйте `runtimeType`.
-- **Flutter hot-reload** регистрирует новый `Type` при каждом reload, что
-  вызывает ограниченный рост кэша (~10–20 записей на дев-сессию). Чтобы сбросить
-  в тестах или при интенсивном hot-reload:
+- **Overriding `runtimeType`** in a subclass is not supported — the cache may
+  break or merge entries of different types. Do not override `runtimeType`.
+- **Flutter hot-reload** registers a new `Type` on every reload, which causes
+  bounded cache growth (~10–20 entries per dev session). To reset it in tests
+  or under heavy hot-reload:
 
   ```dart
   ReactiveStore.resetCache(); // @visibleForTesting
   ```
 
-### 2. Поддерживаются только mutable `abstract`-поля
+### 2. Only mutable `abstract` fields are supported
 
-`noSuchMethod` перехватывает и геттер, и сеттер. Поэтому:
+`noSuchMethod` intercepts both the getter and the setter. Therefore:
 
-- ❌ `abstract final int x` — не работает: `final` не имеет сеттера, нельзя
-  инициализировать в конструкторе → compile error.
-- ❌ Computed (derived) поля не поддерживаются этим подходом. Для computed
-  используйте `signals` напрямую (`computed(...)`) вне ReactiveStore.
+- ❌ `abstract final int x` — does not work: `final` has no setter, so it cannot
+  be initialized in the constructor → compile error.
+- ❌ Computed (derived) fields are not supported by this approach. For computed
+  values, use `signals` directly (`computed(...)`) outside `ReactiveStore`.
 
 ```dart
-// ✅ Правильно:
+// ✅ Correct:
 abstract class _Impl { abstract int count; }
 
-// ❌ Неправильно:
-abstract class _Bad { abstract final int x; }  // compile error с ReactiveStore
+// ❌ Wrong:
+abstract class _Bad { abstract final int x; }  // compile error with ReactiveStore
 ```
 
-### 3. Производительность на hot-path
+### 3. Hot-path performance
 
-`noSuchMethod` + 2 Map lookup'а на каждое чтение/запись. Приемлемо для
-UI-состояния, но узко для tight loops (списки 10k+ элементов). Для hot-path
-consider кодогенерацию (`signals_store_generator`, планируется).
+`noSuchMethod` + 2 Map lookups on every read/write. Acceptable for UI state,
+but tight for hot loops (lists of 10k+ elements). For hot paths consider code
+generation (`signals_store_generator`).
 
-### 4. `dispose()` — ответственность вызывающего
+### 4. `dispose()` is the caller's responsibility
 
-`ReactiveStore` не интегрируется с Flutter lifecycle автоматически. Вы обязаны
-вызывать `dispose()`, иначе сигналы утекут. Идемпотентен, безопасен к
-повторному вызову.
+`ReactiveStore` does not integrate with the Flutter lifecycle automatically. You
+must call `dispose()`, otherwise the signals will leak. It is idempotent and
+safe to call repeatedly.
 
-### 5. Имена сигналов в DevTools
+### 5. Signal names in DevTools
 
-Сигналы именуются чистым именем поля (`count`), а не `Symbol("count")` —
-для читаемости в DevTools и логах.
+Signals are named with the plain field name (`count`), not `Symbol("count")` —
+for readability in DevTools and logs.
 
-## Тестирование
+## Testing
 
 ```bash
-# VM-тесты (по умолчанию):
+# VM tests (default):
 flutter test packages/signals_store/test/
 
-# dart2js smoke (требует node):
+# dart2js smoke (requires node):
 bash packages/signals_store/scripts/dart2js_smoke.sh
 
-# dart2js полный (требует Chrome, для CI):
+# dart2js full (requires Chrome, for CI):
 flutter test packages/signals_store/test/ --platform chrome
 ```
 
-## Лицензия
+## License
 
-См. корневой LICENSE.
+See the root LICENSE.

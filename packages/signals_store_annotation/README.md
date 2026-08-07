@@ -1,21 +1,21 @@
 # signals_store_annotation
 
-Аннотации для реактивных сторов [`signals_store`](../signals_store) и их
-[code-генератора](../signals_store_generator).
+Annotations for the reactive stores of [`signals_store`](../signals_store) and
+their [code generator](../signals_store_generator).
 
-## Установка
+## Installation
 
 ```yaml
 dependencies:
   signals_store_annotation:
-    path: ../../packages/signals_store_annotation  # или git/url
+    path: ../../packages/signals_store_annotation  # or git/url
 ```
 
-## Использование
+## Usage
 
-Аннотация [`@Store`][Store] помечает `abstract`-класс как описание стора: его
-`abstract`-поля (геттер + сеттер) код-генератор превратит в реактивные
-`Signal`-бэкенды.
+The [`@Store`][Store] annotation marks an `abstract` class as a store
+description: its `abstract` fields (getter + setter) are turned by the code
+generator into reactive `Signal` backends.
 
 ```dart
 import 'package:signals_store_annotation/signals_store_annotation.dart';
@@ -27,14 +27,14 @@ abstract class CounterImpl {
 }
 ```
 
-На одном классе допускается ровно одна аннотация `@Store`; несколько аннотаций
-вызывают ошибку кодогенерации.
+Exactly one `@Store` annotation is allowed per class; multiple annotations
+raise a codegen error.
 
-## Связанные пакеты
+## Related packages
 
-- [`signals_store_generator`](../signals_store_generator) — code-генератор,
-  создающий реализации сторов.
-- [`signals_store`](../signals_store) — runtime `ReactiveStore` (альтернатива
-  кодогенерации на базе `noSuchMethod`).
+- [`signals_store_generator`](../signals_store_generator) — the code generator
+  that produces store implementations.
+- [`signals_store`](../signals_store) — the runtime `ReactiveStore` (an
+  alternative to codegen based on `noSuchMethod`).
 
 [Store]: lib/src/annotations.dart

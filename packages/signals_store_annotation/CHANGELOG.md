@@ -1,3 +1,7 @@
+## 0.2.1
+
+- **Docs**: translated the README to English. No behavioral changes.
+
 ## 0.2.0
 
 - **Abstract stores**: added `abstract` flag to `@Store`
