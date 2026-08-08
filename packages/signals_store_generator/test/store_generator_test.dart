@@ -1590,5 +1590,47 @@ $generated''');
       );
       expect(generated, contains('StoreRootScope.unregister(this)'));
     });
+
+    // root store + пользовательский concrete dispose: проверяет полный порядок
+    // super.dispose() → диспоз сигналов → unregister(this).
+    test('root store with concrete dispose: super first, then unregister', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+          void dispose() {
+            // пользовательская логика перед диспозом сигналов
+          }
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('@override'),
+          contains('void dispose() {'),
+          contains('super.dispose();'),
+          contains('count\$.dispose()'),
+          contains('StoreRootScope.unregister(this)'),
+        ]),
+      );
+      // Порядок: super ПЕРВЫМ, unregister ПОСЛЕ диспоза сигналов.
+      final disposeBlock = generated.substring(generated.indexOf('void dispose()'));
+      expect(disposeBlock.indexOf('super.dispose();'),
+          lessThan(disposeBlock.indexOf('count\$.dispose()')));
+      expect(disposeBlock.indexOf('count\$.dispose()'),
+          lessThan(disposeBlock.indexOf('unregister')));
+      await expectCompiles(headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+  void dispose() {}
+}
+
+$generated''');
+    });
   });
 }

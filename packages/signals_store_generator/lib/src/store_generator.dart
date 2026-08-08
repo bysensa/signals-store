@@ -286,16 +286,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     String? rootMemberName,
     String? rootTypeStr,
   }) async {
-    // Store применим только к классам.
-    if (element is! ClassElement) {
-      final name = element.name;
-      final kind = element.kind.displayName;
-      throw InvalidGenerationSource(
-        '@Store can only be applied to classes, but was found on $kind '
-        '"$name".',
-        element: element,
-      );
-    }
+    // element гарантированно ClassElement — не-классы отброшены в generate()
+    // (оба вызывающих пути — _generateForAnnotation и _generateDerived —
+    // приходят сюда только для классов). Приводим один раз.
+    final clazz = element as ClassElement;
 
     // --- Валидация C1: именованные конструкторы запрещены ---
     // Генератор создаёт unnamed-конструктор автоматически, и этого достаточно.
@@ -303,7 +297,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // (Signal-поля), поэтому бессмысленны и потенциально сбивают с толку.
     // Unnamed-конструктор разрешён — он нужен для инициализации concrete-полей
     // через super.x.
-    final namedCtors = element.constructors
+    final namedCtors = clazz.constructors
         .where((c) => c.isOriginDeclaration && !c.isFactory && c.name != 'new')
         .toList();
     if (namedCtors.isNotEmpty) {
@@ -418,7 +412,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // порядок должен совпадать с порядком формалов `SImpl(this._b, this._a)`,
     // а не с алфавитной сортировкой полей. Иначе — тихая перестановка значений.
     final orderedPositionalFormals = <FormalParameterElement>[];
-    for (final p in element.unnamedConstructor?.formalParameters ??
+    for (final p in clazz.unnamedConstructor?.formalParameters ??
         const <FormalParameterElement>[]) {
       if (p.isInitializingFormal) {
         // Ключ — ИМЯ ПОЛЯ. В analyzer 12+ `p.name` для приватного формала
@@ -537,7 +531,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     if (isDerived) {
       // Страховка: abstract root-геттер сюда и так не попадает (он abstract),
       // но если пользователь назвал concrete-геттер именем root — выкидываем,
-      // иначе genератор переопределил бы его как super-делегат.
+      // иначе генератор переопределил бы его как super-делегат.
       concreteGetters.removeWhere((g) => g.name == rootMemberName);
     }
     var reactiveNames = const <String>{};
@@ -703,7 +697,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // _validateDisposeSignature, вызывается выше единым местом (покрывает и
     // @Store, и @DerivedStore).
     final disposeBuffer = StringBuffer();
-    final hasConcreteDispose = element.methods.any(
+    final hasConcreteDispose = clazz.methods.any(
       (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic &&
              !m.isAbstract,
     );
