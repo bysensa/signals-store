@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:build/build.dart';
 import 'package:build_test/build_test.dart';
 import 'package:package_config/package_config.dart';
+import 'package:path/path.dart' as p;
 import 'package:signals_store_generator/src/builder.dart';
 import 'package:test/test.dart';
 
@@ -73,13 +74,26 @@ Future<TestBuilderResult> runBuilderResult(
 /// `required int _count` выглядел правильно, но нарушал
 /// `private_named_non_field_parameter`).
 ///
+/// **CWD-независимость (фикс CI):** раньше временный файл писался в
+/// ОТНОСИТЕЛЬНЫЙ путь `lib/_codegen_compile_check.dart`, что падало с
+/// `PathNotFoundException`, когда `flutter test packages/...` запускался из
+/// корня воркспейса (CWD = корень, `lib/` там нет). Теперь файл пишется по
+/// АБСОЛЮТНОМУ пути от workspace root, а `dart analyze` запускается с
+/// `workingDirectory` = пакет генератора (где есть `lib/` и корректный
+/// package_config через подъём к воркспейсу). Внешний процесс надёжен:
+/// `dart analyze` сам резолвит пакеты и сообщает ошибки (в отличие от
+/// in-memory `AnalysisContextCollection`, который под flutter tester давал
+/// пустые diagnostics — эмпирически отклонено).
+///
 /// [headers] — импорты (аннотация + signals), [body] — полный исходник: декларация
-/// `@Store`-класса + сгенерированный подкласс в одной библиотеке (как part-file).
-/// Код пишется во временный файл в `lib/` (чтобы резолвились зависимости пакета),
-/// анализируется, файл удаляется. Допускаются warnings/info (например,
-/// `unused_element` для приватных полей) — важны только ERRORS.
+/// `@Store`-класса + сгенерированный подкласс в одной библиотеке. Код пишется во
+/// временный файл в `lib/` пакета, анализируется, файл удаляется. Допускаются
+/// warnings/info (например, `unused_element`) — важны только ERRORS.
 Future<void> expectCompiles(String headers, String body) async {
-  final file = File('lib/_codegen_compile_check.dart');
+  final workspaceRoot = _findWorkspaceRoot();
+  final pkgDir = p.join(workspaceRoot, 'packages', 'signals_store_generator');
+  final libDir = p.join(pkgDir, 'lib');
+  final file = File(p.join(libDir, '_codegen_compile_check.dart'));
   await file.writeAsString('$headers\n$body');
   try {
     final result = await Process.run(
@@ -87,6 +101,9 @@ Future<void> expectCompiles(String headers, String body) async {
       // --no-fatal-warnings: warnings (unused_field, unused_element) не валидны
       // для smoke-теста — нас интересуют только ERRORS (незаконный код).
       ['analyze', file.path, '--no-fatal-warnings'],
+      // Запускаем из каталога пакета: package_config.json найдётся при подъёме
+      // к воркспейсу, независимо от CWD вызывающего (локально или CI).
+      workingDirectory: pkgDir,
     );
     expect(
       result.exitCode,
@@ -100,4 +117,18 @@ Future<void> expectCompiles(String headers, String body) async {
   } finally {
     if (file.existsSync()) await file.delete();
   }
+}
+
+/// Каталог воркспейса (где лежит `.dart_tool/package_config.json`).
+String _findWorkspaceRoot() {
+  var dir = Directory.current;
+  for (var i = 0; i < 8; i++) {
+    if (File(p.join(dir.path, '.dart_tool', 'package_config.json')).existsSync()) {
+      return dir.path;
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  throw StateError('Не найден .dart_tool/package_config.json воркспейса.');
 }
