@@ -1,7 +1,13 @@
 ## 0.3.0
 
-- Добавлен `StoreRootScope` — реестр корня дерева сторов с разделением
-  app/test окружений (zone-aware через Expando).
+- **Feature**: added `StoreRootScope` — the store-tree root registry with
+  explicit app/test environment separation. Environment is detected
+  automatically via `Platform.environment['FLUTTER_TEST']` (no manual flag):
+  tests resolve a per-zone registry (auto-isolation via the test runner's
+  per-test zones), the app resolves a single global registry regardless of zone
+  topology (e.g. `runZonedGuarded` in `main`). Roots are held via
+  `WeakReference` to avoid retain cycles; `register`/`of<T>`/`unregister`/
+  `resetCurrentZone` provided.
 
 ## 0.2.1
 

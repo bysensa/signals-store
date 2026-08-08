@@ -1,7 +1,10 @@
 ## 0.3.0
 
-- Добавлен флаг `@Store(root: true)`: стор саморегистрируется в `StoreRootScope`.
-- Добавлена аннотация `@DerivedStore` для derived-сторов с доступом к корню.
+- **Feature**: added `@Store(root: true)` flag — the store auto-registers itself
+  in `StoreRootScope` on construction and becomes a valid target for a derived
+  store's root getter.
+- **Feature**: added `@DerivedStore` annotation — a full store with root access
+  via a bodyless root getter (e.g. `AppStoreImpl get root;`).
 
 ## 0.2.1
 
