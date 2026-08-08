@@ -3,9 +3,10 @@
 import 'enums.dart';
 import 'models.dart';
 import 'package:signals/signals.dart';
-import 'package:signals_store_annotation/signals_store_annotation.dart';
+import 'package:signals_store/signals_store.dart';
 
 part 'stores.g.dart';
+part 'derived_stores.dart';
 
 /// Глобальное дерево сторов по образцу Overmind.
 ///
@@ -105,7 +106,11 @@ abstract class UiStoreImpl {
 /// Вложенные сторы — concrete-поля (стабильные ссылки). Их реактивность
 /// обеспечивается собственными [Signal]-полями каждого подстора, а не
 /// Signal-обёрткой на корне.
-@Store(name: 'AppStore')
+///
+/// Помечен `root: true` — сгенерированный [AppStore] саморегистрируется в
+/// `StoreRootScope` при создании и служит корнем для derived-сторов (см.
+/// `derived_stores.dart`): они резолвят этот стор через `StoreRootScope.of`.
+@Store(name: 'AppStore', root: true)
 abstract class AppStoreImpl {
   final SessionStoreImpl session;
   final ProjectsStoreImpl projects;

@@ -32,6 +32,11 @@ class SavingsStore extends SavingsImpl {
   double get goal => goal$.value;
   @override
   set goal(double value) => goal$.value = value;
+
+  void dispose() {
+    amount$.dispose();
+    goal$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «BudgetStore».
@@ -115,4 +120,15 @@ class BudgetStore extends BudgetStoreImpl {
   double get totalExpensesRaw => super.totalExpenses;
   @override
   String get currencyCode => super.currencyCode;
+
+  void dispose() {
+    income$.dispose();
+    balance$.dispose();
+    balanceUsd$.dispose();
+    formattedBalance$.dispose();
+    isOverdrawn$.dispose();
+    savingsProgress$.dispose();
+    savingsRatio$.dispose();
+    totalExpenses$.dispose();
+  }
 }

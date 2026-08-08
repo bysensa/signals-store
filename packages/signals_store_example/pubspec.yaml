@@ -13,6 +13,8 @@ dependencies:
     sdk: flutter
   signals: ^7.0.0
   signals_flutter: ^7.0.0
+  signals_store:
+    path: ../signals_store
   signals_store_annotation:
     path: ../signals_store_annotation
   signals_store_generator:

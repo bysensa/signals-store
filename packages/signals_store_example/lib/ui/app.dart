@@ -5,7 +5,6 @@ import '../actions/actions.dart';
 import '../data/fake_repos.dart';
 import '../domain/stores.dart';
 import '../usecases/ui_usecases.dart' show ClearSnackbar;
-import 'derived.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 
@@ -51,19 +50,31 @@ class TaskerApp extends StatelessWidget {
 }
 
 /// Переключает экран по состоянию аутентификации (реактивно через computed).
-class _AuthGate extends StatelessWidget {
+///
+/// `TodosDerived` создаётся один раз (в `initState`) и переиспользуется при
+/// rebuild'ах: Computed-поля derived-стора должны жить стабильно, иначе при
+/// каждом rebuild'е плодились бы новые `Computed`-объекты, на которые
+/// подписан `SignalBuilder` (orphan/dispose-эффекты). Root резолвится через
+/// `StoreRootScope` — `AppStore` саморегистрируется как `root: true`.
+class _AuthGate extends StatefulWidget {
   const _AuthGate({required this.store});
   final AppStore store;
 
   @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  late final TodosDerived _derived = TodosDerived();
+
+  @override
   Widget build(BuildContext context) {
-    final derived = Derived.of(store);
     return SignalBuilder(
       builder: (context) {
-        if (derived.isAuthenticated.value) {
-          return HomeScreen(store: store, derived: derived);
+        if (_derived.isAuthenticated) {
+          return HomeScreen(store: widget.store, derived: _derived);
         }
-        return LoginScreen(store: store);
+        return LoginScreen(store: widget.store);
       },
     );
   }

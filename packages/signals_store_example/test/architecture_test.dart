@@ -10,7 +10,6 @@ import 'package:signals_store_example/usecases/auth_usecases.dart';
 import 'package:signals_store_example/usecases/filter_usecases.dart';
 import 'package:signals_store_example/usecases/init_usecases.dart';
 import 'package:signals_store_example/usecases/todo_usecases.dart';
-import 'package:signals_store_example/ui/derived.dart';
 
 /// Архитектурные smoke-тесты примера Tasker.
 ///
@@ -159,8 +158,8 @@ void main() {
       expect(store.tags.tags.length, 3);
       expect(store.projects.todos.length, 4);
 
-      final derived = Derived.of(store);
-      final stats = derived.todoStats.value;
+      final derived = TodosDerived();
+      final stats = derived.todoStats;
       expect(stats.total, 4);
       // Одна задача в сидере помечена done (td4).
       expect(stats.done, 1);
@@ -175,15 +174,15 @@ void main() {
         todosRepo: repos.todos,
         tagsRepo: repos.tags,
       );
-      final derived = Derived.of(store);
+      final derived = TodosDerived();
 
       // После LoadInitialData фильтр по проекту = первый проект (p1 «Личное»),
       // в котором 2 задачи (одна выполнена). Снимем фильтр по проекту, чтобы
       // видеть все 4.
       SetProjectFilter(store)(null);
-      final beforeHide = derived.visibleTodos.value.length;
+      final beforeHide = derived.visibleTodos.length;
       ToggleHideDone(store)();
-      final afterHide = derived.visibleTodos.value.length;
+      final afterHide = derived.visibleTodos.length;
 
       expect(beforeHide, 4);
       expect(afterHide, 3); // одна выполненная скрыта
@@ -199,11 +198,11 @@ void main() {
       store.projects.projects['p1'] =
           const Project(id: 'p1', name: 'P', colorValue: 0xFF000000);
 
-      final derived = Derived.of(store);
+      final derived = TodosDerived();
       var fireCount = 0;
       final sub = effect(() {
         // Чтение computed подписывает эффект на все затронутые сигналы.
-        derived.visibleTodos.value;
+        derived.visibleTodos;
         fireCount++;
       });
       expect(fireCount, 1); // первичное срабатывание.

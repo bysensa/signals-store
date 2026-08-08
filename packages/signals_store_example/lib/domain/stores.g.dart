@@ -44,6 +44,12 @@ class SessionStore extends SessionStoreImpl {
   bool get isLoading => isLoading$.value;
   @override
   set isLoading(bool value) => isLoading$.value = value;
+
+  void dispose() {
+    currentUser$.dispose();
+    error$.dispose();
+    isLoading$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «ProjectsStore».
@@ -68,6 +74,10 @@ class ProjectsStore extends ProjectsStoreImpl {
   String? get currentProjectId => currentProjectId$.value;
   @override
   set currentProjectId(String? value) => currentProjectId$.value = value;
+
+  void dispose() {
+    currentProjectId$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «TagsStore».
@@ -76,6 +86,8 @@ class ProjectsStore extends ProjectsStoreImpl {
 /// concrete-поля пробрасываются как есть.
 class TagsStore extends TagsStoreImpl {
   TagsStore({required super.tags});
+
+  void dispose() {}
 }
 
 /// @Store-generated реализация стора «TodoFilter».
@@ -136,6 +148,14 @@ class TodoFilter extends TodoFilterImpl {
   bool get hasActiveFilter => hasActiveFilter$.value;
   @override
   bool get hasActiveFilterRaw => super.hasActiveFilter;
+
+  void dispose() {
+    hideDone$.dispose();
+    priorityFilter$.dispose();
+    projectFilterId$.dispose();
+    sortBy$.dispose();
+    hasActiveFilter$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «UiStore».
@@ -167,6 +187,11 @@ class UiStore extends UiStoreImpl {
   String? get snackbarMessage => snackbarMessage$.value;
   @override
   set snackbarMessage(String? value) => snackbarMessage$.value = value;
+
+  void dispose() {
+    isBusy$.dispose();
+    snackbarMessage$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «AppStore».
@@ -179,5 +204,63 @@ class AppStore extends AppStoreImpl {
     required super.session,
     required super.tags,
     required super.ui,
-  });
+  }) {
+    StoreRootScope.register(this);
+  }
+
+  void dispose() {
+    StoreRootScope.unregister(this);
+  }
+}
+
+/// @Store-generated реализация стора «TodosDerived».
+///
+/// Реактивные (abstract) поля [TodosDerivedImpl] обёрнуты в [Signal];
+/// concrete-поля пробрасываются как есть.
+class TodosDerived extends TodosDerivedImpl {
+  TodosDerived();
+
+  @override
+  AppStoreImpl get root => StoreRootScope.of<AppStoreImpl>();
+
+  late final Computed<Project?> activeProject$ = computed(
+    () => activeProjectRaw,
+    options: ComputedOptions<Project?>(name: 'TodosDerived.activeProject'),
+  );
+  late final Computed<bool> isAuthenticated$ = computed(
+    () => isAuthenticatedRaw,
+    options: ComputedOptions<bool>(name: 'TodosDerived.isAuthenticated'),
+  );
+  late final Computed<TodoStats> todoStats$ = computed(
+    () => todoStatsRaw,
+    options: ComputedOptions<TodoStats>(name: 'TodosDerived.todoStats'),
+  );
+  late final Computed<List<Todo>> visibleTodos$ = computed(
+    () => visibleTodosRaw,
+    options: ComputedOptions<List<Todo>>(name: 'TodosDerived.visibleTodos'),
+  );
+
+  @override
+  Project? get activeProject => activeProject$.value;
+  @override
+  Project? get activeProjectRaw => super.activeProject;
+  @override
+  bool get isAuthenticated => isAuthenticated$.value;
+  @override
+  bool get isAuthenticatedRaw => super.isAuthenticated;
+  @override
+  TodoStats get todoStats => todoStats$.value;
+  @override
+  TodoStats get todoStatsRaw => super.todoStats;
+  @override
+  List<Todo> get visibleTodos => visibleTodos$.value;
+  @override
+  List<Todo> get visibleTodosRaw => super.visibleTodos;
+
+  void dispose() {
+    activeProject$.dispose();
+    isAuthenticated$.dispose();
+    todoStats$.dispose();
+    visibleTodos$.dispose();
+  }
 }
