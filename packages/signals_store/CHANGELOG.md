@@ -1,3 +1,8 @@
+## 0.3.0
+
+- Добавлен `StoreRootScope` — реестр корня дерева сторов с разделением
+  app/test окружений (zone-aware через Expando).
+
 ## 0.2.1
 
 - **Docs**: translated the README to English. No behavioral changes.
