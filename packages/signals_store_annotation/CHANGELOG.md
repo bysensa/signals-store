@@ -1,3 +1,8 @@
+## 0.3.0
+
+- Добавлен флаг `@Store(root: true)`: стор саморегистрируется в `StoreRootScope`.
+- Добавлена аннотация `@DerivedStore` для derived-сторов с доступом к корню.
+
 ## 0.2.1
 
 - **Docs**: translated the README to English. No behavioral changes.

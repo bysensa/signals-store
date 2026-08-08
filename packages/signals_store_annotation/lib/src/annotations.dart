@@ -30,12 +30,43 @@
 /// }
 /// ```
 class Store {
-  const Store({required this.name, this.abstract = false});
+  const Store({required this.name, this.abstract = false, this.root = false});
 
   /// Имя генерируемого класса-реализации.
   final String name;
 
-  /// Если `true` — генерируется `abstract`-класс (например, обобщённый базовый
-  /// стор). По умолчанию `false` (конкретный класс).
+  /// Если `true` — генерируется `abstract`-класс.
   final bool abstract;
+
+  /// Если `true` — сгенерированный стор саморегистрируется в `StoreRootScope`
+  /// при создании и является валидной целью root-геттера derived-сторов.
+  final bool root;
+}
+
+/// Аннотация: помечает `abstract`-класс как derived-стор — полноценный стор
+/// с собственным состоянием и доступом к корню дерева сторов.
+///
+/// Derived-стор идентичен `@Store` по всем механикам (abstract-поля → Signal,
+/// concrete-поля → pass-through, concrete-геттеры → Computed). Отличия:
+///
+/// - обязательный `abstract`-геттер `root`, типизированный `@Store(root: true)`-
+///   impl'ом; генератор эмитит его реализацию через `StoreRootScope.of<T>()`;
+/// - сгенерированный `dispose()` для on-demand жизненного цикла (см. дизайн).
+///
+/// На одном классе допускается ровно одна аннотация `@DerivedStore`;
+/// `@Store` и `@DerivedStore` на одном классе запрещены.
+///
+/// ```dart
+/// @DerivedStore(name: 'TodoDetailsStore')
+/// abstract class TodoDetailsStoreImpl {
+///   abstract AppStoreImpl get root;
+///   abstract String todoId;
+///   Todo? get todo => root.projects.todos[todoId];
+/// }
+/// ```
+class DerivedStore {
+  const DerivedStore({required this.name});
+
+  /// Имя генерируемого класса-реализации.
+  final String name;
 }
