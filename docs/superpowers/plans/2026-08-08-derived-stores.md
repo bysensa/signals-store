@@ -17,8 +17,9 @@
 - **Переиспользование генератора (требование):** `@Store` и `@DerivedStore` идут через единый приватный эмиттер `_emitStoreClass`; дублирование логики полей/геттеров/конструктора/коллизий между ними запрещено. Любой новый кейс-обработчик должен лечь в `_emitStoreClass` с флагом, а не в отдельную копию.
 - **`dispose()` едино для `@Store` и `@DerivedStore`:** `_emitStoreClass` всегда эмитит `dispose()` (Signal/Computed). `@Store(root: true)` дополнительно снимает регистрацию (`StoreRootScope.unregister(this)`).
 - **`WeakReference` против циклов:** `StoreRootScope` хранит корни только через `WeakReference` — никогда сильной ссылкой. Это снятое требование, а не оптимизация.
+- **Безфлаговый детект окружения:** никакого `static bool _testMode` / `enableTestMode`. Окружение определяется по `Zone.current == Zone.root` или маркеру `appMarker` в parent-chain; тесты попадают в per-zone реестр автоматически (эмпирически подтверждено в Task 2). App с `runZonedGuarded` — одна строка `zoneValues: {StoreRootScope.appMarker: true}`.
 - **Комментарии/документация** — на русском, в стиле существующих докстринг.
-- **Verify-before-planning**: эмпирические проверки зон (Task 2) выполняются ДО реализации `StoreRootScope` — от их результата зависит устройство `enableTestMode`/`resetTestScope`.
+- **Verify-before-planning**: гипотезы зон проверены при дизайне (Task 2 = регресс-зонды), не «до».
 
 ## Ссылка на дизайн
 
@@ -173,80 +174,71 @@ git commit -m "feat(annotation): add @Store(root: true) flag and @DerivedStore a
 
 ---
 
-### Task 2: Эмпирические зонды зон (verify-before-planning)
+### Task 2: Регресс-зонды зон (verify-before-planning — подтверждено при дизайне)
 
-**Цель:** до реализации `StoreRootScope` проверить 3 гипотезы, от которых зависит его устройство. Находки зафиксировать в комментариях `scope.dart` (Task 3).
+**Цель:** при дизайне эмпирически подтверждено (см. спеку «Эмпирические проверки»):
+1. package:test создаёт отдельный `Zone.current` на каждый тест;
+2. `Zone.operator[]` ходит по parent-chain (zone-values предков видны потомку).
+Эти факты — основа автодетекта окружения в Task 3 (без флага). Задача —
+зафиксировать их как регресс-тест, чтобы будущие изменения раннера/SDK не сломали
+дизайн тихо.
 
 **Files:**
 - Create: `packages/signals_store/test/zone_probe_test.dart`
 
-**Interfaces:**
-- Produces: текстовые находки (записываются в Task 3 как комментарии). Проверка: `flutter test test/zone_probe_test.dart` проходит, assertions соответствуют наблюдённому.
-
-- [ ] **Step 1: Написать зонды**
+- [ ] **Step 1: Написать регресс-зонды**
 
 `packages/signals_store/test/zone_probe_test.dart`:
 
 ```dart
-// Эмпирические зонды Zone-поведения под flutter test.
-// Цель: подтвердить допущения StoreRootScope ДО его реализации.
+// Регресс-зонды Zone-поведения под flutter test.
+// Гипотезы StoreRootScope (безфлагового детекта окружения):
+//   A: тело теста всегда в дочерней зоне, отличной от Zone.root;
+//   B: соседние тесты имеют разные Zone.current (per-test изоляция);
+//   C: Zone.operator[] наследует zone-values предков (parent-chain lookup).
 import 'dart:async';
 import 'package:test/test.dart';
 
 void main() {
-  // Зонд A: разные ли Zone.current у соседних test()?
-  test('probe A: per-test Zone.current differs', () {
-    final z = Zone.current;
-    // Запоминаем во внешнем capture и сравниваем во втором тесте.
-    _probeAZones.add(z);
-    printOnFailure('A zone: ${z.hashCode}');
+  // A + B: тело теста не в root, соседние тесты — разные зоны.
+  test('probe A: test body zone is NOT root', () {
+    expect(identical(Zone.current, Zone.root), isFalse);
   });
 
-  test('probe A2: second test zone', () {
-    final z = Zone.current;
-    _probeAZones.add(z);
-    printOnFailure('A2 zone: ${z.hashCode}');
-    // Если раннер даёт зону на тест — хэш-коды различны.
-    expect(_probeAZones.toSet().length, greaterThan(1),
-        reason: 'Ожидаем разные Zone.current на тест (иначе resetTestScope обязателен)');
+  test('probe B: per-test distinct zones', () {
+    _zones.add(Zone.current);
+  });
+  test('probe B2: per-test distinct zones (cross-check)', () {
+    _zones.add(Zone.current);
+    expect(_zones.map((z) => z.hashCode).toSet().length, _zones.length,
+        reason: 'соседние тесты должны иметь разные зоны');
+    expect(_zones.any((z) => identical(z, Zone.root)), isFalse);
   });
 
-  // Зонд B: async-callback внутри теста — та же зона?
-  test('probe B: async continuation preserves zone', () async {
-    final before = Zone.current;
-    await Future<void>.delayed(const Duration(milliseconds: 1));
-    final after = Zone.current;
-    expect(identical(before, after), true,
-        reason: 'async-await должен сохранять Zone.current');
+  // C: zone-values предка видны потомку через operator[].
+  test('probe C: parent-chain zone-value lookup', () {
+    final key = #probe_c;
+    final child = Zone.current.fork(zoneValues: {key: 'child-val'});
+    child.run(() {
+      expect(Zone.current[key], 'child-val');
+    });
   });
 }
 
-final _probeAZones = <Zone>[];
+final _zones = <Zone>[];
 ```
 
-- [ ] **Step 2: Запустить, прочитать вывод**
+- [ ] **Step 2: Запустить — должны пройти (гипотезы подтверждены при дизайне)**
 
 Run: `cd packages/signals_store && flutter test test/zone_probe_test.dart`
-Наблюдаем: A/A2 — различаются ли хэш-коды? B — passed?
+Expected: PASS. Если упал — дизайн StoreRootScope нужно пересмотреть (но при
+дизайне зонды под package:test прошли).
 
-- [ ] **Step 3: Зафиксировать находку**
-
-Записать результат (passed/failed) комментарием в начале файла:
-
-```dart
-// НАХОДКИ (flutter test, package:test):
-//   A: <различаются / совпадают> — значит resetTestScope <нужен / не нужен>.
-//   B: async сохраняет зону → резолв после await видит регистрацию.
-// testWidgets-проверка (зонд C) — в Task 3 после реализации, через виджет-тест.
-```
-
-(Если A падает — значит раннер НЕ даёт per-test зоны → в Task 3 `resetTestScope()` становится обязательным в tearDown, что уже предусмотрено дизайном.)
-
-- [ ] **Step 4: Коммит**
+- [ ] **Step 3: Коммит**
 
 ```bash
 git add packages/signals_store/test/zone_probe_test.dart
-git commit -m "test(signals_store): zone-behavior probes for StoreRootScope design"
+git commit -m "test(signals_store): regression probes for zone-based scope detection"
 ```
 
 ---
@@ -264,23 +256,25 @@ git commit -m "test(signals_store): zone-behavior probes for StoreRootScope desi
 
 **Interfaces:**
 - Produces:
-  - `StoreRootScope.register(Object root)` — пишет в активное окружение через **`WeakReference`**.
+  - `StoreRootScope.appMarker` (`Object`, `const #signals_store_app`) — маркер app-окружения для zone-values (нужен только при `runZonedGuarded` в main).
+  - `StoreRootScope.register(Object root)` — пишет в активное окружение через **`WeakReference`**; превентивно чистит мёртвые weak-записи.
   - `StoreRootScope.of<T>()` → `T` — резолв по типу (`is T`-скан по weak-ссылкам); убирает мёртвые записи влетую; `StateError` если не найден.
-  - `StoreRootScope.unregister(Object root)` — явное удаление weak-записи (вызывается из dispose root-стора).
-  - `StoreRootScope.enableTestMode()` (`@visibleForTesting`).
-  - `StoreRootScope.resetTestScope()` (`@visibleForTesting`).
+  - `StoreRootScope.unregister(Object root)` — явное удаление weak-записи (из dispose root-стора).
+  - `StoreRootScope.resetCurrentZone()` (`@visibleForTesting`) — опциональная очистка per-zone реестра.
+- **Окружение детектится автоматически** (без флага): `Zone.current == Zone.root` или `Zone.current[appMarker] == true` → app; иначе → per-zone test-реестр.
 
 - [ ] **Step 1: Написать падающие тесты**
 
-`packages/signals_store/test/scope_test.dart`:
+`packages/signals_store/test/scope_test.dart` (заметьте: **без** `enableTestMode` — детектится по зоне):
 
 ```dart
 import 'package:signals_store/signals_store.dart';
 import 'package:test/test.dart';
 
 void main() {
-  setUpAll(StoreRootScope.enableTestMode);
-  tearDown(StoreRootScope.resetTestScope);
+  // Per-test зоны раннера дают изоляцию; resetCurrentZone — опциональная
+  // страховка для раннеров с общей зоной файла.
+  tearDown(StoreRootScope.resetCurrentZone);
 
   test('register then of<T> resolves the instance', () {
     final app = _App();
@@ -306,17 +300,8 @@ void main() {
     expect(StoreRootScope.of<_AppImpl>(), same(store));
   });
 
-  test('test-mode does not leak into app registry', () {
-    // После resetTestScope (tearDown) предыдущий тест не виден здесь.
-    expect(() => StoreRootScope.of<_App>(), throwsStateError);
-  });
-
-  // Разрыв цикла удержания: scope НЕ удерживает корень сильно.
-  test('weak ref: collected root is not resolvable', () {
-    StoreRootScope.register(_App()); // сильной ссылки нет
-    // Принуждаем GC и обнуление weak-target. В Dart нет детерминированного GC,
-    // но unregister моделирует тот же эффект детерминированно:
-    // (детерминированную проверку сбора делает следующий тест через unregister.)
+  test('per-test isolation: previous registration not visible here', () {
+    // Этот тест идёт после тестов выше; per-test зона → пусто.
     expect(() => StoreRootScope.of<_App>(), throwsStateError);
   });
 
@@ -332,7 +317,7 @@ void main() {
     final first = _App();
     StoreRootScope.register(first);
     final second = _App();
-    StoreRootScope.register(second); // dispose не вызывался — replace по типу
+    StoreRootScope.register(second);
     expect(StoreRootScope.of<_App>(), same(second));
   });
 }
@@ -350,79 +335,59 @@ Expected: FAIL — `StoreRootScope` undefined / export missing.
 
 - [ ] **Step 3: Реализовать `scope.dart`**
 
-`packages/signals_store/lib/src/scope.dart` (с учётом находок Task 2 — если A показал «зоны не различаются», `resetTestScope` в tearDown обязателен, что тесты выше и предполагают):
+`packages/signals_store/lib/src/scope.dart` — безфлаговый детект по зоне:
 
 ```dart
 import 'dart:async';
 
 import 'package:meta/meta.dart';
 
-/// Глобальный реестр корня дерева сторов с явным разделением окружений.
+/// Глобальный реестр корня дерева сторов с автодетектом окружения по зоне.
 ///
-/// **App-окружение** (по умолчанию): один глобальный zone-free реестр.
-/// Приложение имеет один инстанс корня каждого типа; топология зон приложения
-/// на резолв не влияет.
+/// Окружение определяется автоматически (без флага и ручного включения):
+/// - **App:** типичный `main()` стартует в [Zone.root]; app с `runZonedGuarded`
+///   помечает свою зону через [appMarker] (одна строка в main).
+/// - **Test:** тело теста всегда в дочерней зоне без app-маркера (package:test /
+///   flutter_test форкают зону на тест) → автоматически per-zone реестр с
+///   автоизоляцией между тестами.
 ///
-/// **Test-окружение** ([enableTestMode]): регистрации привязываются к
-/// `Zone.current` через [Expando] (zone-values иммутабельны — форкать зону
-/// ради значения нельзя), плюс file-level fallback. Раннеры, дающие per-test
-/// зону, изолируют автоматически; иначе — [resetTestScope] в `tearDown`.
-/// Тестовые регистрации никогда не попадают в app-реестр и наоборот.
+/// Окружения не пересекаются: test-регистрации никогда не попадают в app-реестр
+/// и наоборот.
 ///
 /// **Циклы удержания:** реестр хранит корни ТОЛЬКО через [WeakReference].
 /// Стор удерживается обычными ссылками приложения (дерево, State); scope его
-/// не держит. Стор без сильных ссылок собирается GC, его weak-запись
-/// обнуляется и убирается при следующем обходе [of]. Корневой стор в своём
-/// [dispose] дополнительно явно снимает регистрацию через [unregister] —
-/// детерминизм для тестов вместо ожидания GC.
+/// не держит. Корневой стор в [dispose] снимает регистрацию через [unregister]
+/// — детерминизм для тестов вместо ожидания GC.
 class StoreRootScope {
   StoreRootScope._();
 
-  // App-окружение.
-  static final List<WeakReference<Object>> _appRoots = [];
+  /// Маркер app-окружения для zone-values. Нужен только если приложение
+  /// оборачивает `main` в `runZonedGuarded` (crash-reporting и т.п.):
+  ///
+  /// ```
+  /// runZoned(() => runApp(...),
+  ///     zoneValues: {StoreRootScope.appMarker: true}, ...);
+  /// ```
+  static const Object appMarker = #signals_store_app;
 
-  // Test-окружение: реестры по зоне + fallback.
-  static final Expando<List<WeakReference<Object>>> _testByZone =
-      Expando('StoreRootScope.test');
-  static final List<WeakReference<Object>> _testFallback = [];
-  static bool _testMode = false;
+  static final _Registry _appRegistry = _Registry();
+  static final Expando<_Registry> _testByZone = Expando();
 
   /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
-  /// того же типа заменяет предыдущую (hot reload, повторное создание в тесте).
-  /// Превентивно чистит мёртвые weak-записи (`target == null`).
+  /// того же типа заменяет предыдущую. Превентивно чистит мёртвые weak-записи.
   static void register(Object root) {
-    final registry = _activeRegistry();
-    // Превентивная очистка мёртвых weak-записей: реестр не копит мусор между
-    // вызовами of<T> (важно при пересоздании корня без dispose — см. спеку).
-    registry.removeWhere((ref) => ref.target == null);
-    registry
-      ..removeWhere((ref) => ref.target?.runtimeType == root.runtimeType)
-      ..add(WeakReference(root));
+    final reg = _active();
+    reg.purge();
+    reg.set(root);
   }
 
   /// Явное снятие регистрации — вызывается из dispose корневого стора.
-  static void unregister(Object root) {
-    _activeRegistry().removeWhere((ref) => identical(ref.target, root));
-  }
+  static void unregister(Object root) => _active().remove(root);
 
   /// Резолвит корень типа [T]. Бросает [StateError], если не зарегистрирован.
   static T of<T>() {
-    final registry = _activeRegistry();
-    T? found;
-    for (final ref in registry.toList()) {
-      final target = ref.target;
-      if (target == null) {
-        // Мёртвая weak-запись — убираем влетую.
-        registry.remove(ref);
-        continue;
-      }
-      if (target is T) {
-        found = target;
-        // Не выходим: позднее повторное override того же типа должно выиграть,
-        // если пользователь перерегистрировал (последний wins).
-      }
-    }
-    if (found != null) return found;
+    final target = _active().lookup<T>();
+    if (target != null) return target;
     throw StateError(
       'StoreRootScope: корень типа $T не зарегистрирован. '
       'Убедитесь, что соответствующий стор помечен @Store(root: true) '
@@ -430,28 +395,55 @@ class StoreRootScope {
     );
   }
 
-  /// Включает тестовое окружение. Вызывать в `setUpAll` тестового файла.
+  /// Очищает per-zone реестр текущей зоны (tearDown). Опционально: per-test
+  /// зоны раннера уже изолируют.
   @visibleForTesting
-  static void enableTestMode() => _testMode = true;
-
-  /// Очищает регистрации тестового окружения текущей зоны и fallback.
-  @visibleForTesting
-  static void resetTestScope() {
-    final byZone = _testByZone[Zone.current];
-    if (byZone != null) byZone.clear();
-    _testFallback.clear();
+  static void resetCurrentZone() {
+    final reg = _testByZone[Zone.current];
+    reg?.clear();
   }
 
-  static List<WeakReference<Object>> _activeRegistry() {
-    if (!_testMode) return _appRoots;
-    return _testByZone[Zone.current] ??= _testFallback;
+  static _Registry _active() {
+    // operator[] ходит по parent-chain: маркер виден всему app-подграфу.
+    if (identical(Zone.current, Zone.root) ||
+        Zone.current[appMarker] == true) {
+      return _appRegistry;
+    }
+    return _testByZone[Zone.current] ??= _Registry();
   }
 }
-```
 
-Примечание к `of<T>`: обход собирает последнее совпадение по типу — это реализует
-«последняя регистрация того же типа выигрывает» даже когда типы совпадают по
-`is T` (наследник/база). Мёртвые weak-записи убираются в том же проходе.
+/// Внутренний реестр: weak-ссылки на корни + lookup по типу с очисткой мусора.
+class _Registry {
+  final List<WeakReference<Object>> _refs = [];
+
+  void set(Object root) {
+    _refs
+      ..removeWhere((r) => r.target?.runtimeType == root.runtimeType)
+      ..add(WeakReference(root));
+  }
+
+  void remove(Object root) =>
+      _refs.removeWhere((r) => identical(r.target, root));
+
+  void purge() => _refs.removeWhere((r) => r.target == null);
+
+  T? lookup<T>() {
+    T? found;
+    for (final ref in _refs.toList()) {
+      final t = ref.target;
+      if (t == null) {
+        _refs.remove(ref);
+        continue;
+      }
+      if (t is T) found = t; // последний wins (см. спеку).
+    }
+    return found;
+  }
+
+  void clear() => _refs.clear();
+}
+```
 
 - [ ] **Step 4: Экспортировать**
 
@@ -1412,8 +1404,8 @@ import 'package:signals/signals.dart';
 import 'package:test/test.dart';
 
 void main() {
-  setUpAll(StoreRootScope.enableTestMode);
-  tearDown(StoreRootScope.resetTestScope);
+  // Окружение детектится автоматически по зоне — без enableTestMode.
+  tearDown(StoreRootScope.resetCurrentZone); // опциональная страховка
 
   AppStore _newStore() => AppStore(
         session: SessionStore(currentUser: null, isLoading: false, error: null),
@@ -1526,11 +1518,13 @@ git commit -m "chore: derived stores feature complete"
 
 **Placeholder scan:** единственный `UnimplementedError` в Task 6 Step 1 — осознанный указатель на рефакторинг (Step 2), реальный helper `expectCompiles`.
 
-**Type consistency:** `StoreRootScope.{register,of,unregister,enableTestMode,resetTestScope}` (Task 3) используются в Tasks 4,6,8,9; `@Store(root: true)`/`@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
+**Type consistency:** `StoreRootScope.{appMarker,register,of,unregister,resetCurrentZone}` (Task 3, без флага) используются в Tasks 4,6,8,9; `@Store(root: true)`/`@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
+
+**Безфлаговый детект окружения:** окружение определяется по `Zone.current == Zone.root` (или `appMarker` в parent-chain через `operator[]`) — без `static bool`. Тесты автоматически per-zone (Task 2 подтвердил per-test зоны). App с `runZonedGuarded` — маркер в zone-values (документируется). `enableTestMode` устранён.
 
 **Риски/допущения для реализующего агента:**
 - Конкретные номера строк в `store_generator.dart` даны приблизительно (файл 712 строк) — ориентироваться по сигнатурам/комментариям, не по номерам.
-- Поведение `_activeRegistry` (Task 3) и zone-изоляция зависят от находок Task 2 — реализовать Step 3 Task 3 только после Step 2/3 Task 2.
-- Если эмпирический зонд A покажет, что per-test зон НЕТ — `resetTestScope` обязателен (тесты Task 3 уже предполагают это).
-- `WeakReference` в Dart не даёт детерминированного GC-теста; тест «collected root is not resolvable» (Task 3) детерминированно моделирует эффект через `unregister` (отдельный тест). Не полагаться на `gc()` — его нет в стабильном API.
+- Гипотезы зон (Task 2) подтверждены при дизайне под package:test; если при запуске регресс-зондов под конкретной версией раннера они упадут — пересмотреть `_active()` (вероятно, вернуть опциональный маркер для app).
+- `WeakReference` в Dart не даёт детерминированного GC-теста; тест «weak ref» (если останется) моделирует эффект через `unregister`. Не полагаться на `gc()` — его нет в стабильном API.
 - `of<T>` «последний wins»: при нескольких регистрациях одного типа возвращается последнее совпадание по `is T` — задокументировано в Task 3 Step 3.
+- App с `runZonedGuarded` без маркера `appMarker` → регистрации уйдут в per-zone test-реестр и не будут видны UI в другой зоне → `StateError`. Документировать prominently в README/runtime-doc.

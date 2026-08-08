@@ -170,69 +170,79 @@ class TodoDetailsStore extends TodoDetailsStoreImpl {
 
 ## StoreRootScope (runtime, signals_store)
 
-Реестр корня с **явным разделением окружений** — app и test. Окружения не
-пересекаются: test-регистрации никогда не попадают в app-реестр и наоборот;
-в test-режиме app-реестр не читается и не пишется.
+Реестр корня с **автодетектом окружения по зоне** — никакого глобального флага
+и ручного включения. Окружения не пересекаются: test-регистрации никогда не
+попадают в app-реестр и наоборот.
+
+Принцип детекции (по `Zone.current` + parent-chain, без `static bool`):
+- **Типичный app** стартует в `Zone.root` → app-окружение.
+- **App с `runZonedGuarded`** (crash-reporting и т.п.) — `Zone.current != root`,
+  но в parent-chain нет app-маркера → единственный случай, требующий явного
+  маркера: `runZoned(..., zoneValues: {StoreRootScope.appMarker: true})`.
+- **Тесты** всегда в дочерней зоне без app-маркера (package:test / flutter_test
+  форкают зону на каждый тест — подтверждено эмпирически) → автоматически
+  test-окружение с per-zone реестром → автоизоляция.
 
 ```dart
 class StoreRootScope {
-  // App-окружение: глобальный реестр, НЕ зависящий от зон.
-  static final List<Object> _appRoots = [];
+  // Маркер app-окружения для zone-values (нужен только при runZonedGuarded).
+  static const Object appMarker = #signals_store_app;
 
-  // Test-окружение: реестры, привязанные к зоне теста (Expando — zone-values
-  // иммутабельны, положить значение в зону без форка нельзя), плюс
-  // file-level fallback для раннеров без per-test зон.
-  static final Expando<List<Object>> _testByZone =
-      Expando('StoreRootScope.test');
-  static final List<Object> _testFallback = [];
-  static bool _testMode = false;
+  static final _Registry _appRegistry = _Registry();
+  static final Expando<_Registry> _testByZone = Expando();
 
-  /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
-  /// того же типа заменяет предыдущую (hot reload, повторное создание в тесте).
-  /// Превентивно чистит мёртвые weak-записи (`target == null`).
+  /// Регистрирует [root] (слабо) в активном окружении.
   static void register(Object root);
 
-  /// Резолвит корень по типу в активном окружении (`is T`-скан).
-  /// Не найден → StateError с понятным текстом.
+  /// Резолвит корень типа [T] (`is T`-скан по weak-ссылкам); `StateError`,
+  /// если не найден. Убирает мёртвые weak-записи влетую.
   static T of<T>();
 
-  /// Включает тестовое окружение (вызывать в setUpAll тестового файла).
-  /// Далее register/of работают только с test-реестрами.
-  @visibleForTesting
-  static void enableTestMode();
+  /// Явное снятие регистрации (вызывается из dispose корневого стора).
+  static void unregister(Object root);
 
-  /// Очищает регистрации тестового окружения (tearDown). Не требуется,
-  /// если раннер даёт per-test зоны (см. эмпирическую проверку №1).
+  /// Очищает per-zone реестр текущей зоны (tearDown). Опционально: per-test
+  /// зоны раннера уже изолируют, явный сброс нужен лишь при общей зоне файла.
   @visibleForTesting
-  static void resetTestScope();
+  static void resetCurrentZone();
+
+  // Детекция окружения:
+  static _Registry _active() {
+    // app: типичный main в Zone.root, ИЛИ zone-values-маркер в цепочке
+    // (operator[] ходит по parent-chain — подтверждено эмпирически).
+    if (identical(Zone.current, Zone.root) ||
+        Zone.current[appMarker] == true) {
+      return _appRegistry;
+    }
+    // test: дочерняя зона без app-маркера → per-zone реестр.
+    return _testByZone[Zone.current] ??= _Registry();
+  }
 }
 ```
 
-- **App-окружение (по умолчанию):** один глобальный zone-free реестр.
-  Приложение имеет один инстанс корня каждого типа; топология зон приложения
-  (`runZonedGuarded` в `main()` и т.п.) на резолв не влияет.
-- **Test-окружение:** регистрация привязывается к `Zone.current` через
-  Expando. Раннеры с per-test зонами дают автоизоляцию без `tearDown`;
-  иначе — file-level fallback + `resetTestScope()` в `tearDown`.
-- **Авторегистрация:** конструктор сгенерированного стора с
-  `@Store(root: true)` получает тело `{ StoreRootScope.register(this); }` —
-  пишет в активное окружение: создание такого стора в тесте автоматически
-  попадает в test-окружение, в приложении — в глобальный реестр. Сторы без
-  маркировки не меняются. `main.dart` не меняется вообще.
+- **Почему без флага:** `Zone.current == Zone.root` надёжно отличает типичный
+  app от теста; `operator[]` ищет маркер по всей parent-chain без ручного
+  обхода; runZonedGuarded — единственный случай, требующий маркера.
+- **Тестам ничего делать не нужно:** тело теста всегда в дочерней зоне
+  (эмпирически — package:test создаёт зону на тест) → автоматически test.
+- **Авторегистрация:** конструктор стора с `@Store(root: true)` пишет в активное
+  окружение через `StoreRootScope.register(this)`. В тесте — per-zone реестр,
+  в приложении — глобальный. `main.dart` не меняется.
+- **App с `runZonedGuarded`:** обернуть `runZoned(() { runApp(...); },
+  zoneValues: {StoreRootScope.appMarker: true}, ...)` — одна строка,
+  документируется.
 
-### Эмпирические проверки ДО реализации (обязательные задачи плана)
+### Эмпирические проверки (проверено при дизайне)
 
-По принципу verify-before-planning — гипотезы проверяются кодом:
-
-1. Создаёт ли package:test / flutter_test отдельный `Zone.current` на тест.
-   От этого зависит гранулярность автоизоляции test-окружения: per-test зоны →
-   `resetTestScope()` не нужен; общая зона файла → нужен в `tearDown`.
-2. `testWidgets`: виден ли во время билда реестр, зарегистрированный в теле
-   теста (зона биндинга vs зона тела). Если нет — для виджет-тестов
-   документируем file-level регистрацию + `resetTestScope()`.
-3. Поведение signals после `dispose()`: что происходит при доступе к
-   Signal/Computed после dispose — зафиксировать и задокументировать для
-   derived-сторов.
+1. **package:test / flutter_test создают зону на каждый тест** — ✅ проверено
+   (зонд: тело теста всегда в дочерней зоне, отличной от `Zone.root`, и
+   соседние тесты имеют разные зоны). Отсюда автоизоляция test-окружения без
+   `tearDown`. Регресс-тест (зонд) включается в план.
+2. **`Zone.operator[]` ходит по parent-chain** — ✅ проверено (zone-values
+   предков видны потомку). Отсюда один маркер в zone-values покрывает весь
+   app-подграф, включая `runZonedGuarded`.
+3. Поведение signals после `dispose()` — проверяется при реализации
+   (зафиксировать фактическое поведение для документации).
 
 ## Root-маркировка: `@Store(root: true)`
 
@@ -297,10 +307,10 @@ Root-статус — **явная маркировка**, а не вывод и
 
 ## Тестирование
 
-- Юнит-тесты derived: `setUpAll(StoreRootScope.enableTestMode)`; тест создаёт
-  `AppStore(...)` (авторегистрация пишет в test-окружение) → создаёт derived →
-  assert. Изоляция per-test — через зоны раннера; при общей зоне файла —
-  `tearDown(StoreRootScope.resetTestScope)`.
+- Юнит-тесты derived: тест создаёт `AppStore(...)` (авторегистрация пишет в
+  test-окружение — детектится автоматически по зоне, без `enableTestMode`) →
+  создаёт derived → assert. Изоляция per-test — через зоны раннера
+  автоматически; `resetCurrentZone()` в tearDown опционален.
 - Подмена корня: `StoreRootScope.register(fakeExtendsAppStoreImpl)` — резолв
   по `is T` найдёт фейк.
 - Тесты генератора: contains-матчеры + обязательный `dart analyze` на
@@ -334,6 +344,11 @@ Root-статус — **явная маркировка**, а не вывод и
   поля в одном сторе молча меняет поведение другого; реструктуризация дерева
   ломает derived на этапе кодогенерации; тип не может быть одновременно
   корнем и подстором. Заменено явной маркировкой `@Store(root: true)`.
+- **`static bool _testMode` + ручное `enableTestMode()`** — лишний boilerplate
+  (забыл в одном файле — баг) и глобальное состояние. Заменено автодетектом по
+  зоне: типичный app в `Zone.root`, тесты — в дочерней зоне (эмпирически всегда);
+  единственный нестандартный случай (`runZonedGuarded` в main) — маркер в
+  zone-values, не флаг.
 - **Хук `onDispose()`** — лишняя конвенция имени; заменён естественным
   override: impl объявляет `dispose()`, генератор вызывает `super.dispose()`
   первым.
