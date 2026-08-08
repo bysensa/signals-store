@@ -378,4 +378,110 @@ abstract class SImpl {
       isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
     );
   });
+
+  test('validation: root getter typed by another derived store → build error',
+      () async {
+    // derived-of-derived: root должен быть @Store(root: true), не derived.
+    final result = await runBuilderResult(packageConfig, headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+}
+
+@DerivedStore(name: 'Middle')
+abstract class MiddleImpl {
+  AppStoreImpl get root;
+  abstract int a;
+}
+
+@DerivedStore(name: 'Leaf')
+abstract class LeafImpl {
+  MiddleImpl get root;
+  abstract int a;
+}
+''');
+    expect(result.succeeded, false);
+    // MiddleImpl не помечен @Store(root: true) → падает на «none typed by a root store».
+    expect(result.errors.join('\n'), contains('root: true'));
+    expect(
+      result.readerWriter.testing.assets,
+      isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+    );
+  });
+
+  test('validation: non-abstract @DerivedStore → build error', () async {
+    final result = await runBuilderResult(packageConfig, headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+}
+
+@DerivedStore(name: 'D')
+class DImpl {
+  AppStoreImpl get root => throw UnimplementedError();
+}
+''');
+    expect(result.succeeded, false);
+    expect(result.errors.join('\n'), contains('abstract'));
+    expect(
+      result.readerWriter.testing.assets,
+      isNot(contains(AssetId('a', 'lib/store.store_generator.g.part'))),
+    );
+  });
+
+  test('two parallel roots in one library: derived can target either', () async {
+    // Два стора помечены root: true — оба регистрируют; derived типизируется любым.
+    final generated = await runBuilder(packageConfig, headers, '''
+@Store(name: 'StoreA', root: true)
+abstract class StoreAImpl {
+  abstract int a;
+}
+
+@Store(name: 'StoreX', root: true)
+abstract class StoreXImpl {
+  abstract int x;
+}
+
+@DerivedStore(name: 'D')
+abstract class DImpl {
+  StoreAImpl get root;
+  int get doubled => root.a * 2;
+}
+''');
+    expect(
+      generated,
+      allOf([
+        contains('class D extends DImpl'),
+        contains('StoreAImpl get root => StoreRootScope.of<StoreAImpl>()'),
+        // Оба root-стора регистрируют себя.
+        contains('class StoreA extends StoreAImpl'),
+        contains('class StoreX extends StoreXImpl'),
+      ]),
+    );
+    // Ровно два вызова register — по одному на корень.
+    expect('StoreRootScope.register(this)'.allMatches(generated).length, 2);
+  });
+
+  test('derived: getter reading only non-reactive concrete field stays plain',
+      () async {
+    // FP-guard: геттер, читающий только собственное НЕ-реактивное concrete-поле,
+    // не должен становиться Computed.
+    final generated = await runBuilder(packageConfig, headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+}
+
+@DerivedStore(name: 'D')
+abstract class DImpl {
+  AppStoreImpl get root;
+  final String label;
+  DImpl({required this.label});
+  String get upper => label.toUpperCase();
+  int get doubled => root.count * 2;
+}
+''');
+    expect(generated, contains('Computed<int> doubled\$')); // читает root
+    expect(generated, isNot(contains('upper\$'))); // НЕ читает root
+  });
 }

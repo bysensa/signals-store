@@ -216,10 +216,15 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     }).toList();
     if (rootTypedGetters.isEmpty) {
       throw InvalidGenerationSource(
-        'Derived store "${element.name}" must declare exactly one abstract '
-        'getter typed by a @Store(root: true) impl (e.g. '
-        '"AppStoreImpl get root;" in an abstract class). Found '
-        '${rootGetters.length} abstract getter(s), none typed by a root store.',
+        'Derived store "${element.name}" must declare exactly one root getter '
+        'typed by a @Store(root: true) impl (e.g. "AppStoreImpl get root;" — '
+        'a bodyless getter in the abstract class). Found ${rootGetters.length} '
+        'abstract getter(s), none typed by a root store.\n'
+        'If you did declare a root getter, the root type may be in a DIFFERENT '
+        'library: the generator resolves root types per-library, so the '
+        '@DerivedStore and its @Store(root: true) root must live in one '
+        'library — use part/part of to place them in separate files of the '
+        'same library. Otherwise mark the root store with @Store(root: true).',
         element: element,
       );
     }

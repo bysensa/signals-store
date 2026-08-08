@@ -67,5 +67,14 @@ void main() {
       final derived = TodosDerived();
       expect(derived.dispose, returnsNormally);
     });
+
+    // D1: двойной dispose идемпотентен (signals dispose идемпотентны — проверено
+    // эмпирически; повторный вызов не должен падать).
+    test('double dispose is idempotent', () {
+      newStore();
+      final derived = TodosDerived();
+      derived.dispose();
+      expect(derived.dispose, returnsNormally);
+    });
   });
 }
