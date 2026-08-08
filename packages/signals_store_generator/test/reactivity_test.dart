@@ -164,6 +164,33 @@ abstract class FilterStoreImpl {
     expect(reactive, contains('sortIndex'));
   });
 
+  // ---- @DerivedStore: root-геттер как реактивное имя (контракт Task 6/7) ----
+  //
+  // Детектор получает reactive-базу из ПОЛЕЙ класса (abstract + реактивные типы).
+  // Геттер root в @DerivedStore — это bodyless getter (его тип ∈ storeImplNames,
+  // но геттеры в базу полей не входят). Поэтому генератор передаёт имя root
+  // вручную через extraReactiveNames (см. store_generator.dart). Этот тест —
+  // ПРЯМАЯ проверка детектора (а не косвенно через генератор, как в Task 6):
+  // если root посеян в extraReactiveNames, геттеры, читающие root.*, становятся
+  // computed; геттер без обращений к reactive — остаётся plain.
+
+  test('derived: getter reading root.* → computed', () async {
+    final reactive = await _detect(r'''
+abstract class AppStoreImpl {
+  abstract int count;
+}
+
+abstract class DerivedImpl {
+  AppStoreImpl get root;                // bodyless getter (NOT abstract — нет слова abstract)
+  int get doubled => root.count * 2;    // читает root → реактивен
+  int get constant => 42;               // не реактивен
+}
+''', storeImplNames: {'AppStoreImpl', 'DerivedImpl'}, targetClass: 'DerivedImpl',
+        extraReactiveNames: {'root'});
+    expect(reactive, containsAll(['root', 'doubled']));
+    expect(reactive, isNot(contains('constant')));
+  });
+
   // ---- Signal-коллекции (MapSignal, ListSignal, ...) — авто-детекция по типу ----
 
   test('MapSignal field → reactive (auto-detected by type)', () async {
@@ -1126,10 +1153,16 @@ abstract class AppImpl {
 /// Concrete-поле, типизированное таким классом, реактивно как подстор.
 /// *Signal-коллекции* (MapSignal, ListSignal, ...) и классы с Signal внутри
 /// определяются детектором автоматически через тип — передавать их не нужно.
+///
+/// [extraReactiveNames] моделирует `extraReactiveNames` детектора — имена,
+/// которые генератор добавляет в базу реактивности вручную (для @DerivedStore:
+/// имя root-геттера; его тип ∈ rootImplNames ⊂ storeImplNames, но геттеры в базу
+/// полей не входят). По умолчанию пусто — как в обычном @Store без root-имени.
 Future<Set<String>> _detect(
   String source, {
   Set<String>? storeImplNames,
   String? targetClass,
+  Set<String>? extraReactiveNames,
 }) async {
   // Каждый вызов — изолированная поддиректория со своим pubspec и
   // package_config (через symlink на общий .dart_tool).
@@ -1180,6 +1213,7 @@ Future<Set<String>> _detect(
   return computeReactiveGetters(
     clazz: element,
     storeImplNames: storeImplNames ?? const {},
+    extraReactiveNames: extraReactiveNames ?? const {},
   );
 }
 
