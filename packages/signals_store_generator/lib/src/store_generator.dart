@@ -150,6 +150,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // базовый стор, чью конкретную реализацию пишет пользователь). По умолчанию
     // `false` — конкретный класс.
     final isAbstract = annotation.peek('abstract')?.boolValue ?? false;
+    // `root: true` → стор саморегистрируется в `StoreRootScope` (авторегистрация
+    // корня дерева сторов). Сгенерированный конструктор получает тело
+    // `{ StoreRootScope.register(this); }`, dispose снимает регистрацию.
+    final isRoot = annotation.peek('root')?.boolValue ?? false;
 
     // Дублирующее определение реализации с тем же именем в одной библиотеке
     // дало бы compile error у потребителя — это нормально, лишних проверок не
@@ -443,9 +447,16 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       if (positionalSuperArgs.isNotEmpty)
         'super(${positionalSuperArgs.join(', ')})',
     ];
+    // Тело конструктора: для root-стора — авторегистрация в StoreRootScope.
+    // `this` доступен в теле (после initializer-list); signals уже созданы.
+    // `;` ставится только когда нет тела: после `{ ... }` точка с запятой
+    // незаконна (function-body не terminating-ся `;`).
+    final ctorBody = isRoot ? ' { StoreRootScope.register(this); }' : '';
     buffer
       ..write('  $storeName({${ctorParams.join(', ')}})')
-      ..write(allInits.isEmpty ? ';' : ' : ${allInits.join(', ')};')
+      ..write(allInits.isEmpty
+          ? (ctorBody.isEmpty ? ';' : ctorBody)
+          : ' : ${allInits.join(', ')}${ctorBody.isEmpty ? ';' : ctorBody}')
       ..writeln();
 
     // Поля-сигналы (только реактивные).
@@ -472,6 +483,32 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       buffer.writeln();
       buffer.writeln([...computedGetters, ...plainGetters].join('\n'));
     }
+
+    // dispose() — единая механика для @Store и @DerivedStore.
+    // Диспозит Signal/Computed-поля; для root-стора снимает регистрацию в
+    // StoreRootScope. Если суперкласс уже объявил concrete `dispose()`,
+    // генерируем @override + super.dispose() — валидация сигнатуры
+    // пользовательского dispose (non-void/параметры) добавляется в Task 6.
+    final disposeBuffer = StringBuffer();
+    final hasConcreteDispose = element.methods.any(
+      (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic &&
+             !m.isAbstract,
+    );
+    if (hasConcreteDispose) disposeBuffer.writeln('  @override');
+    disposeBuffer.write('  void dispose() {');
+    if (hasConcreteDispose) disposeBuffer.write(' super.dispose();');
+    disposeBuffer.writeln();
+    for (final f in reactiveFields) {
+      disposeBuffer.writeln('    ${f.name}\$.dispose();');
+    }
+    for (final g in reactiveNames) {
+      disposeBuffer.writeln('    $g\$.dispose();');
+    }
+    if (isRoot) disposeBuffer.writeln('    StoreRootScope.unregister(this);');
+    disposeBuffer.writeln('  }');
+    buffer
+      ..writeln()
+      ..write(disposeBuffer.toString());
 
     buffer.writeln('}');
 

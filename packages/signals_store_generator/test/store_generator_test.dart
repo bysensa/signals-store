@@ -32,6 +32,7 @@ void main() {
   // сгенерированного кода — отдельная задача).
   const headers = '''
 import 'package:signals_store_annotation/signals_store_annotation.dart';
+import 'package:signals_store/signals_store.dart';
 import 'package:signals/signals.dart';
 ''';
 
@@ -1519,6 +1520,85 @@ abstract class SImpl {
 }
 
 $generated''');
+    });
+  });
+
+  // --- @Store(root: true): авторегистрация в StoreRootScope + единый dispose ---
+
+  group('@Store(root: true)', () {
+    test('root store constructor registers itself in StoreRootScope', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('class AppStore extends AppStoreImpl'),
+          contains('StoreRootScope.register(this)'),
+        ]),
+      );
+      await _expectCompiles(headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+}
+
+$generated''');
+    });
+
+    test('non-root store has no registration call', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'LeafStore')
+        abstract class LeafImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(generated, isNot(contains('StoreRootScope')));
+    });
+
+    test('every @Store emits dispose() disposing signals', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'S')
+        abstract class SImpl {
+          abstract int a;
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('void dispose()'),
+          contains('a\$.dispose()'),
+        ]),
+      );
+    });
+
+    test('root store dispose() unregisters itself', () async {
+      final generated = await _run(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(generated, contains('StoreRootScope.unregister(this)'));
     });
   });
 }

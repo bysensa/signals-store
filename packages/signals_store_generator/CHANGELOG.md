@@ -1,3 +1,18 @@
+## 0.6.0
+
+- **Feature (`@Store(root: true)`)**: a store annotated `@Store(root: true)`
+  auto-registers itself in `StoreRootScope` — the constructor body emits
+  `StoreRootScope.register(this)` (the root of the store tree, discoverable by
+  derived stores via `StoreRootScope.of<T>()`). Non-root stores are unchanged.
+- **Feature (unified `dispose()`)**: every generated `@Store` now emits a
+  `void dispose()` method that disposes its `Signal` fields (`field$.dispose()`)
+  and `Computed` fields (`getter$.dispose()`); for a `@Store(root: true)` store
+  `dispose()` also calls `StoreRootScope.unregister(this)`. If the annotated
+  superclass declares its own concrete `dispose()`, the generated method
+  `@override`s it and chains `super.dispose()`. The generated code now imports
+  `package:signals_store/signals_store.dart` for `StoreRootScope`.
+- (Поддержка `@DerivedStore` — последующие задачи.)
+
 ## 0.5.0
 
 - **Deps**: raised the `analyzer` constraint from `^8.1.1` to `^12.1.0`. This
