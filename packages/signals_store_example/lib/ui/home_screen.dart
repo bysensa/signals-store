@@ -3,7 +3,6 @@ import 'package:signals_flutter/signals_flutter.dart';
 
 import '../domain/stores.dart';
 import '../intents/intents.dart';
-import 'derived.dart';
 import 'widgets/filter_bar.dart';
 import 'widgets/stats_card.dart';
 import 'widgets/todo_list_tile.dart';
@@ -21,7 +20,7 @@ class HomeScreen extends StatelessWidget {
   });
 
   final AppStore store;
-  final Derived derived;
+  final TodosDerived derived;
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +28,7 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: SignalBuilder(
           builder: (context) {
-            final project = derived.activeProject.value;
+            final project = derived.activeProject;
             return Text(project?.name ?? 'Все проекты');
           },
         ),
@@ -53,7 +52,7 @@ class HomeScreen extends StatelessWidget {
             // Список пересчитывается реактивно через visibleTodos computed.
             child: SignalBuilder(
               builder: (context) {
-                final todos = derived.visibleTodos.value;
+                final todos = derived.visibleTodos;
                 if (todos.isEmpty) {
                   return const Center(
                     child: Text(

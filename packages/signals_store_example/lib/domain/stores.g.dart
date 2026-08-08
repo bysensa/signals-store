@@ -44,6 +44,12 @@ class SessionStore extends SessionStoreImpl {
   bool get isLoading => isLoading$.value;
   @override
   set isLoading(bool value) => isLoading$.value = value;
+
+  void dispose() {
+    currentUser$.dispose();
+    error$.dispose();
+    isLoading$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «ProjectsStore».
@@ -68,6 +74,10 @@ class ProjectsStore extends ProjectsStoreImpl {
   String? get currentProjectId => currentProjectId$.value;
   @override
   set currentProjectId(String? value) => currentProjectId$.value = value;
+
+  void dispose() {
+    currentProjectId$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «TagsStore».
@@ -76,6 +86,8 @@ class ProjectsStore extends ProjectsStoreImpl {
 /// concrete-поля пробрасываются как есть.
 class TagsStore extends TagsStoreImpl {
   TagsStore({required super.tags});
+
+  void dispose() {}
 }
 
 /// @Store-generated реализация стора «TodoFilter».
@@ -136,6 +148,14 @@ class TodoFilter extends TodoFilterImpl {
   bool get hasActiveFilter => hasActiveFilter$.value;
   @override
   bool get hasActiveFilterRaw => super.hasActiveFilter;
+
+  void dispose() {
+    hideDone$.dispose();
+    priorityFilter$.dispose();
+    projectFilterId$.dispose();
+    sortBy$.dispose();
+    hasActiveFilter$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «UiStore».
@@ -167,6 +187,11 @@ class UiStore extends UiStoreImpl {
   String? get snackbarMessage => snackbarMessage$.value;
   @override
   set snackbarMessage(String? value) => snackbarMessage$.value = value;
+
+  void dispose() {
+    isBusy$.dispose();
+    snackbarMessage$.dispose();
+  }
 }
 
 /// @Store-generated реализация стора «AppStore».
@@ -179,5 +204,155 @@ class AppStore extends AppStoreImpl {
     required super.session,
     required super.tags,
     required super.ui,
-  });
+  }) {
+    StoreRootScope.register(this);
+  }
+
+  void dispose() {
+    StoreRootScope.unregister(this);
+  }
+}
+
+/// @Store-generated реализация стора «TodosDerived».
+///
+/// Реактивные (abstract) поля [TodosDerivedImpl] обёрнуты в [Signal];
+/// concrete-поля пробрасываются как есть.
+class TodosDerived extends TodosDerivedImpl {
+  TodosDerived();
+
+  @override
+  AppStoreImpl get root => StoreRootScope.of<AppStoreImpl>();
+
+  late final Computed<Project?> activeProject$ = computed(
+    () => activeProjectRaw,
+    options: ComputedOptions<Project?>(name: 'TodosDerived.activeProject'),
+  );
+  late final Computed<bool> isAuthenticated$ = computed(
+    () => isAuthenticatedRaw,
+    options: ComputedOptions<bool>(name: 'TodosDerived.isAuthenticated'),
+  );
+  late final Computed<TodoStats> todoStats$ = computed(
+    () => todoStatsRaw,
+    options: ComputedOptions<TodoStats>(name: 'TodosDerived.todoStats'),
+  );
+  late final Computed<List<Todo>> visibleTodos$ = computed(
+    () => visibleTodosRaw,
+    options: ComputedOptions<List<Todo>>(name: 'TodosDerived.visibleTodos'),
+  );
+
+  @override
+  Project? get activeProject => activeProject$.value;
+  @override
+  Project? get activeProjectRaw => super.activeProject;
+  @override
+  bool get isAuthenticated => isAuthenticated$.value;
+  @override
+  bool get isAuthenticatedRaw => super.isAuthenticated;
+  @override
+  TodoStats get todoStats => todoStats$.value;
+  @override
+  TodoStats get todoStatsRaw => super.todoStats;
+  @override
+  List<Todo> get visibleTodos => visibleTodos$.value;
+  @override
+  List<Todo> get visibleTodosRaw => super.visibleTodos;
+
+  void dispose() {
+    activeProject$.dispose();
+    isAuthenticated$.dispose();
+    todoStats$.dispose();
+    visibleTodos$.dispose();
+  }
+}
+
+/// @Store-generated реализация стора «TodoDetailsStore».
+///
+/// Реактивные (abstract) поля [TodoDetailsStoreImpl] обёрнуты в [Signal];
+/// concrete-поля пробрасываются как есть.
+class TodoDetailsStore extends TodoDetailsStoreImpl {
+  TodoDetailsStore({required bool isEditing, required String todoId})
+    : isEditing$ = Signal<bool>(
+        isEditing,
+        options: SignalOptions<bool>(name: 'TodoDetailsStore.isEditing'),
+      ),
+      todoId$ = Signal<String>(
+        todoId,
+        options: SignalOptions<String>(name: 'TodoDetailsStore.todoId'),
+      );
+
+  final Signal<bool> isEditing$;
+  final Signal<String> todoId$;
+
+  @override
+  bool get isEditing => isEditing$.value;
+  @override
+  set isEditing(bool value) => isEditing$.value = value;
+  @override
+  String get todoId => todoId$.value;
+  @override
+  set todoId(String value) => todoId$.value = value;
+
+  @override
+  AppStoreImpl get root => StoreRootScope.of<AppStoreImpl>();
+
+  late final Computed<bool> canSave$ = computed(
+    () => canSaveRaw,
+    options: ComputedOptions<bool>(name: 'TodoDetailsStore.canSave'),
+  );
+  late final Computed<String> headerTitle$ = computed(
+    () => headerTitleRaw,
+    options: ComputedOptions<String>(name: 'TodoDetailsStore.headerTitle'),
+  );
+  late final Computed<Project?> project$ = computed(
+    () => projectRaw,
+    options: ComputedOptions<Project?>(name: 'TodoDetailsStore.project'),
+  );
+  late final Computed<List<Todo>> relatedTodos$ = computed(
+    () => relatedTodosRaw,
+    options: ComputedOptions<List<Todo>>(name: 'TodoDetailsStore.relatedTodos'),
+  );
+  late final Computed<List<Tag>> tags$ = computed(
+    () => tagsRaw,
+    options: ComputedOptions<List<Tag>>(name: 'TodoDetailsStore.tags'),
+  );
+  late final Computed<Todo?> todo$ = computed(
+    () => todoRaw,
+    options: ComputedOptions<Todo?>(name: 'TodoDetailsStore.todo'),
+  );
+
+  @override
+  bool get canSave => canSave$.value;
+  @override
+  bool get canSaveRaw => super.canSave;
+  @override
+  String get headerTitle => headerTitle$.value;
+  @override
+  String get headerTitleRaw => super.headerTitle;
+  @override
+  Project? get project => project$.value;
+  @override
+  Project? get projectRaw => super.project;
+  @override
+  List<Todo> get relatedTodos => relatedTodos$.value;
+  @override
+  List<Todo> get relatedTodosRaw => super.relatedTodos;
+  @override
+  List<Tag> get tags => tags$.value;
+  @override
+  List<Tag> get tagsRaw => super.tags;
+  @override
+  Todo? get todo => todo$.value;
+  @override
+  Todo? get todoRaw => super.todo;
+
+  void dispose() {
+    isEditing$.dispose();
+    todoId$.dispose();
+    canSave$.dispose();
+    headerTitle$.dispose();
+    project$.dispose();
+    relatedTodos$.dispose();
+    tags$.dispose();
+    todo$.dispose();
+  }
 }

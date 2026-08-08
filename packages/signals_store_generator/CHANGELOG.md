@@ -1,3 +1,38 @@
+## 0.6.0
+
+- **Feature (`@Store(root: true)`)**: a store annotated `@Store(root: true)`
+  auto-registers itself in `StoreRootScope` — the constructor body emits
+  `StoreRootScope.register(this)` (the root of the store tree, discoverable by
+  derived stores via `StoreRootScope.of<T>()`). Non-root stores are unchanged.
+- **Feature (unified `dispose()`)**: every generated `@Store` now emits a
+  `void dispose()` method that disposes its `Signal` fields (`field$.dispose()`)
+  and `Computed` fields (`getter$.dispose()`); for a `@Store(root: true)` store
+  `dispose()` also calls `StoreRootScope.unregister(this)`. If the annotated
+  superclass declares its own concrete `dispose()`, the generated method
+  `@override`s it and chains `super.dispose()`. The generated code now imports
+  `package:signals_store/signals_store.dart` for `StoreRootScope`.
+- **Feature (`@DerivedStore`)**: derived stores with root access via
+  `StoreRootScope.of<T>()`, their own reactive state, computed getters, and
+  `dispose()`. A `@DerivedStore` class declares one abstract getter typed by a
+  `@Store(root: true)` impl (the root slot); the generator emits it as
+  `@override <Type> get <root> => StoreRootScope.of<<Type>>();` — a **getter**
+  (not `late final`), so a freshly created derived always binds to the current
+  root after root re-creation. Everything else (abstract fields → `Signal`,
+  concrete fields → pass-through, concrete getters → `Computed`, name
+  collisions, `dispose()`) is shared with `@Store` via the existing emitter.
+  `@Store` and `@DerivedStore` on one class is rejected; a field (not getter)
+  typed by a root store is rejected; a root getter typed by a non-root store is
+  rejected.
+- **Fix (dispose double-dispose)**: the unified `dispose()` previously emitted
+  `field$.dispose()` twice for abstract fields (once via the field loop, once
+  via the reactive-name loop). Now only `Computed` getters are disposed in the
+  reactive-name loop; abstract fields are disposed once via the field loop.
+  No behavioral change for correct usage (Signal/Computed `dispose()` is
+  idempotent), but the generated source is no longer redundant.
+- **Fix (empty constructor params)**: a store with no constructor parameters
+  (e.g. a derived store whose state is only computed getters over the root)
+  previously emitted an invalid `({})` named-parameter list; now emits `()`.
+
 ## 0.5.0
 
 - **Deps**: raised the `analyzer` constraint from `^8.1.1` to `^12.1.0`. This

@@ -76,6 +76,7 @@ TestReaderWriter createDependencyReader(
   PackageConfig packageConfig, {
   List<String> dependencyPackages = const [
     'signals_store_annotation',
+    'signals_store',
     'signals',
   ],
   bool flattenOutput = true,

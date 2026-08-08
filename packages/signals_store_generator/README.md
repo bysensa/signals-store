@@ -197,6 +197,45 @@ works with a typed substore whose fields are reactive.
 
 [overmind]: https://overmindjs.org
 
+## Root store and derived stores
+
+Mark the tree root with `@Store(root: true)`. The generated constructor
+auto-registers the instance in `StoreRootScope` (and `dispose()` unregisters it),
+so any code can resolve it by type without passing a reference:
+
+```dart
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  final SessionStoreImpl session;
+  abstract bool isBusy;
+  AppStoreImpl({required this.session});
+}
+```
+
+`@DerivedStore` marks a full store with **access to the root** — own reactive
+state plus computed getters that read the root. Derived stores are created
+on demand anywhere (e.g. as screen state); they resolve the root lazily via
+`StoreRootScope.of<T>()`:
+
+```dart
+@DerivedStore(name: 'TodoDetailsStore')
+abstract class TodoDetailsStoreImpl {
+  AppStoreImpl get root;            // bodyless — generated as a getter
+  abstract String todoId;           // own Signal-backed state (creation param)
+  Todo? get todo => root.projects.todos[todoId]; // computed (reads root)
+}
+```
+
+The root getter is a bodyless getter (no `abstract` keyword — Dart forbids it
+on members) emitted as `get root => StoreRootScope.of<AppStoreImpl>()`, so a
+derived store always sees the **current** root even after re-creation. The
+existing reactivity detector marks getters reading `root.*` as `Computed`.
+
+**Per-library constraint:** the generator resolves the root-getter type within
+a single library, so a `@DerivedStore` and its `@Store(root: true)` root must
+live in one library. To split them across files, use `part`/`part of` — both
+files form one library.
+
 ## Error behavior
 
 - `@Store` on a non-class (for example, `const value = 42;`) → codegen error:
@@ -205,5 +244,8 @@ works with a typed substore whose fields are reactive.
   nothing to generate.``
 - Multiple `@Store` annotations on one class → error: ``... is annotated with
   multiple @Store annotations``. Move each implementation into its own class.
+- `@DerivedStore` without a root-getter typed by a `@Store(root: true)` impl →
+  error: ``... must declare exactly one ... getter typed by a @Store(root: true)
+  impl``. Mark the root store `root: true`, or declare the getter.
 
 [Store]: ../signals_store_annotation/lib/src/annotations.dart

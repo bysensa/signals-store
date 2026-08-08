@@ -1,3 +1,11 @@
+## 0.3.0
+
+- **Feature**: added `@Store(root: true)` flag — the store auto-registers itself
+  in `StoreRootScope` on construction and becomes a valid target for a derived
+  store's root getter.
+- **Feature**: added `@DerivedStore` annotation — a full store with root access
+  via a bodyless root getter (e.g. `AppStoreImpl get root;`).
+
 ## 0.2.1
 
 - **Docs**: translated the README to English. No behavioral changes.

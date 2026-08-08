@@ -3,7 +3,7 @@ description: >-
   Code generator for signals_store. Turns an abstract class annotated with a
   single @Store annotation into a concrete subclass with Signal-backed reactive
   fields and Computed-backed derived getters.
-version: 0.5.0
+version: 0.6.0
 repository: https://github.com/bysensa/signals-store
 issue_tracker: https://github.com/bysensa/signals-store/issues
 topics:
@@ -20,7 +20,7 @@ resolution: workspace
 dependencies:
   # Workspace auto-resolves this to the local package during development;
   # when published, it points to the hosted version on pub.dev.
-  signals_store_annotation: ^0.2.0
+  signals_store_annotation: ^0.3.0
   # analyzer 12.1.0 is the highest version compatible with Flutter's pinned
   # meta 1.18.0 (analyzer >=13.1.0 requires meta ^1.18.3, which no stable
   # Flutter SDK provides yet) AND with the test stack in this workspace

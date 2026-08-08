@@ -1,13 +1,10 @@
 // ignore_for_file: lines_longer_than_80_chars
 
-import 'dart:io';
-
 import 'package:build/build.dart';
-import 'package:build_test/build_test.dart';
 import 'package:package_config/package_config.dart';
-import 'package:signals_store_generator/src/builder.dart';
 import 'package:test/test.dart';
 
+import 'helpers/codegen_checks.dart';
 import 'helpers/flutter_test_harness.dart';
 
 /// Тесты генератора сторов через `testBuilder`.
@@ -26,17 +23,11 @@ void main() {
     packageConfig = await loadWorkspacePackageConfig();
   });
 
-  // Общий заголовок входной библиотеки. `signals` импортируется, т.к.
-  // сгенерированный код ссылается на `Signal`/`SignalOptions` (сам генератор
-  // их не резолвит — только типы полей, но проверка компилируемости
-  // сгенерированного кода — отдельная задача).
-  const headers = '''
-import 'package:signals_store_annotation/signals_store_annotation.dart';
-import 'package:signals/signals.dart';
-''';
+  // Общий заголовок входной библиотеки — общий хелпер (см. helpers/codegen_checks.dart).
+  const headers = codegenHeaders;
 
   test('single @Store → single concrete class with one field', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -61,7 +52,7 @@ import 'package:signals/signals.dart';
 
   test('multiple @Store annotations on one class → build error, no output asset',
       () async {
-    final result = await _runResult(
+    final result = await runBuilderResult(
       packageConfig,
       headers,
       '''
@@ -82,7 +73,7 @@ import 'package:signals/signals.dart';
   });
 
   test('multiple fields of different types are all generated', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -112,7 +103,7 @@ import 'package:signals/signals.dart';
   });
 
   test('nullable field type is preserved', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -134,7 +125,7 @@ import 'package:signals/signals.dart';
   });
 
   test('a generic field type is rendered as-is', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -155,7 +146,7 @@ import 'package:signals/signals.dart';
 
   test('class without abstract fields → build error, no output asset',
       () async {
-    final result = await _runResult(
+    final result = await runBuilderResult(
       packageConfig,
       headers,
       '''
@@ -174,7 +165,7 @@ import 'package:signals/signals.dart';
 
   test('@Store on a non-class element → build error, no output asset',
       () async {
-    final result = await _runResult(
+    final result = await runBuilderResult(
       packageConfig,
       headers,
       '''
@@ -194,7 +185,7 @@ import 'package:signals/signals.dart';
 
   test('concrete field is passed through as super.param, not Signal-wrapped',
       () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -219,7 +210,7 @@ import 'package:signals/signals.dart';
   });
 
   test('mixed abstract (reactive) + concrete (pass-through) fields', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -248,7 +239,7 @@ import 'package:signals/signals.dart';
 
   test('public abstract field → public signal field (no underscore prefix)', () async {
     // Публичное поле `count` → публичное signal-поле `count$` (без `_`).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -276,7 +267,7 @@ import 'package:signals/signals.dart';
     // геттер/сеттер `_count`. Но параметр конструктора — ПУБЛИЧНЫЙ `count`
     // (stripped-имя): Dart запрещает приватные имена в named-параметрах, не
     // являющихся initializing-formal (`private_named_non_field_parameter`).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -306,7 +297,7 @@ import 'package:signals/signals.dart';
   test('mixed public and private fields keep their respective visibility', () async {
     // Публичное и приватное поля в одном классе: signal-поля наследуют
     // видимость каждого (public → `name$`, private → `_count$`).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -334,7 +325,7 @@ import 'package:signals/signals.dart';
 
   test('concrete-only class emits constructor without initializer list', () async {
     // Класс без reactive-полей → конструктор без `:` (нет Signal-инициализаторов).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -359,7 +350,7 @@ import 'package:signals/signals.dart';
 
   test('reactive-only class emits constructor with initializer list', () async {
     // Только reactive-поля → конструктор с инициализатором сигнала, без super.x.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -384,7 +375,7 @@ import 'package:signals/signals.dart';
 
   test('generic abstract store emits abstract keyword with type params', () async {
     // Комбинация abstract: true + generics — заголовок с `abstract class` и bounds.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       '''
 import 'package:signals_store_annotation/signals_store_annotation.dart';
@@ -410,7 +401,7 @@ class Result {}
   // --- Вложенные сторы (impl → implementation rewrite) ---
 
   test('field typed as another @Store impl uses the implementation name', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -446,7 +437,7 @@ class Result {}
     // В отличие от concrete-полей (super.x, тип из суперкласса), reactive-поле
     // типизированное impl-классом, рендерится с явным типом → rewrite на имя
     // реализации обязателен.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -476,7 +467,7 @@ class Result {}
   test('multiple nested substores form a composition tree', () async {
     // Корневой стор с несколькими подсторами (как AppStore в example):
     // каждый concrete-поле пробрасывается через super-параметр.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -515,7 +506,7 @@ class Result {}
   });
 
   test('deeply nested store chain (A → B → C) generates all levels', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -555,7 +546,7 @@ class Result {}
   test('concrete field typed as non-store type is NOT rewritten', () async {
     // Concrete-поле с обычным (не стором) типом рендерится как super.x —
     // rewrite на impl-имя НЕ должен применяться.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -583,7 +574,7 @@ class Result {}
   test('nullable reactive field typed as @Store impl keeps nullable suffix', () async {
     // Reactive-поле с nullable impl-типом: rewrite `InnerStoreImpl?` → `InnerStore?`.
     // Проверяет ветку nullabilitySuffix == question в _typeStringFor.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -612,7 +603,7 @@ class Result {}
   test('reactive field typed as generic @Store impl keeps type args', () async {
     // Reactive-поле типизированное generic-стором: rewrite должен сохранить
     // type-аргументы (`BoxImpl<int>` → `Box<int>`, а не голый `Box`).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -646,7 +637,7 @@ class Result {}
     // concrete-полей не применяется — см. комментарий в _generateForAnnotation).
     // Generic-стор при этом сохраняет type-параметр в декларации (Box<T>),
     // а конкретизация (<int>) остаётся в типе concrete-поля суперкласса.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -680,7 +671,7 @@ class Result {}
   test('static field in store class is ignored (not a constructor param)', () async {
     // `static const`-поле — это константа класса, а не состояние экземпляра;
     // оно НЕ должно попадать в конструктор сгенерированного стора.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -708,7 +699,7 @@ class Result {}
     // `late`-поле без инициализатора не является ни реактивным (abstract),
     // ни concrete pass-through — оно инициализируется позже вручную и НЕ должно
     // становиться super-параметром (у суперкласса нет такого параметра).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -740,7 +731,7 @@ class Result {}
     // поле инициализируется. Это НЕ баг: ответственность за инициализацию
     // late-поля лежит на пользователе (как и для обычного late). Regression
     // guard: генератор не должен ломать этот паттерн.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -766,7 +757,7 @@ class Result {}
     );
     // И сгенерированный код компилируется (late final инициализируется через
     // super() — тело ctor суперкласса).
-    await _expectCompiles(headers, '''
+    await expectCompiles(headers, '''
 @Store(name: 'LazyInitStore')
 abstract class LazyInitImpl {
   late final int f;
@@ -782,7 +773,7 @@ $generated''');
   // --- Обобщённые параметры (generics) ---
 
   test('generic type params are carried over to declaration and extends', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -806,7 +797,7 @@ $generated''');
   });
 
   test('multiple generic params with bounds are preserved in declaration', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       '''
 import 'package:signals_store_annotation/signals_store_annotation.dart';
@@ -836,7 +827,7 @@ class Result {}
   // --- Абстрактные сторы (@Store(abstract: true)) ---
 
   test('abstract: true emits `abstract class` keyword', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       '''
 import 'package:signals_store_annotation/signals_store_annotation.dart';
@@ -864,7 +855,7 @@ class Result {}
   });
 
   test('abstract defaults to false (concrete class by default)', () async {
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -884,7 +875,7 @@ class Result {}
   test('reactive getter (reads abstract fields) → computed contract', () async {
     // Геттер `sum` читает reactive-поля a, b → становится computed.
     // Генерируется: sum$ (Computed), sum (→ sum$.value), sumRaw (→ super.sum).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -913,7 +904,7 @@ class Result {}
   test('non-reactive getter (no reactive references) → plain override', () async {
     // Геттер `hundred` не ссылается на reactive → остаётся обычным,
     // переопределяется как super.hundred (чтобы класс не стал abstract).
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -931,7 +922,7 @@ class Result {}
 
   test('getter reading substore → computed', () async {
     // Геттер `authed` читает поле-подстор session → реактивен → computed.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -965,7 +956,7 @@ class Result {}
     // реальное поведение в build_runner через регенерацию example (отдельный
     // шаг). Здесь фиксируем: total ЛИБО computed, ЛИБО plain — оба исхода
     // валидны для интеграционного smoke-теста.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       '''
 import 'package:signals_store_annotation/signals_store_annotation.dart';
@@ -996,7 +987,7 @@ final globalCount = signal(10);
 
   test('store without concrete getters → no Computed/output', () async {
     // Класс без concrete getters: ничего связанного с computed не генерируется.
-    final generated = await _run(
+    final generated = await runBuilder(
       packageConfig,
       headers,
       '''
@@ -1016,7 +1007,7 @@ final globalCount = signal(10);
   group('audit: unhandled codegen scenarios', () {
     // C1: класс с ИМЕНОВАННЫМ конструктором → ошибка кодогенерации.
     test('C1: named constructor in impl → build error', () async {
-      final result = await _runResult(
+      final result = await runBuilderResult(
         packageConfig,
         headers,
         '''
@@ -1049,7 +1040,7 @@ final globalCount = signal(10);
     // C4: класс БЕЗ unnamed-конструктора с concrete-полем → ошибка кодогенерации.
     test('C4: class without unnamed constructor + concrete field → build error',
         () async {
-      final result = await _runResult(
+      final result = await runBuilderResult(
         packageConfig,
         headers,
         '''
@@ -1082,7 +1073,7 @@ final globalCount = signal(10);
     // A2: getter с именем, совпадающим с abstract-полем.
     test('A2: getter name collides with abstract field — actual behavior',
         () async {
-      final result = await _runResult(
+      final result = await runBuilderResult(
         packageConfig,
         headers,
         '''
@@ -1115,7 +1106,7 @@ final globalCount = signal(10);
 
     // A3: getter называется 'sumRaw' — конфликт с computed-контрактом.
     test('A3: getter named like Raw suffix (sumRaw) → build error', () async {
-      final result = await _runResult(
+      final result = await runBuilderResult(
         packageConfig,
         headers,
         '''
@@ -1148,7 +1139,7 @@ final globalCount = signal(10);
 
     // B1: abstract-поле с function type.
     test('B1: abstract field with function type — actual behavior', () async {
-      final generated = await _run(
+      final generated = await runBuilder(
         packageConfig,
         headers,
         '''
@@ -1167,7 +1158,7 @@ final globalCount = signal(10);
     // B2: computed-геттер возвращает function type.
     test('B2: computed getter returning function type — actual behavior',
         () async {
-      final generated = await _run(
+      final generated = await runBuilder(
         packageConfig,
         headers,
         '''
@@ -1197,13 +1188,13 @@ final globalCount = signal(10);
     // приватный signal `_count$`, приватные геттер/сеттер `_count`. Код должен
     // компилироваться (раньше эмитил `required int _count` — незаконно).
     test('C-private-1: private abstract field → compiling code', () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'CounterStore')
       abstract class CounterImpl {
         abstract int _count;
       }
       ''');
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'CounterStore')
 abstract class CounterImpl {
   abstract int _count;
@@ -1216,14 +1207,14 @@ $generated''');
     // → `super(secret)` в initializer-list. Компилируется.
     test('C-private-2: private concrete field (positional super) → compiling',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'HolderStore')
       abstract class HolderImpl {
         final int _secret;
         HolderImpl(this._secret);
       }
       ''');
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'HolderStore')
 abstract class HolderImpl {
   final int _secret;
@@ -1238,7 +1229,7 @@ $generated''');
     // super-параметр подклассу — фундаментальное ограничение).
     test('C-private-3: private concrete field (named super) → build error',
         () async {
-      final result = await _runResult(packageConfig, headers, '''
+      final result = await runBuilderResult(packageConfig, headers, '''
       @Store(name: 'HolderStore')
       abstract class HolderImpl {
         final int _secret;
@@ -1268,7 +1259,7 @@ $generated''');
     // named super-параметр с явным `super(...)` вызовом для позиционных.
     test('C-private-4: mixed public (named) + private (positional) concrete → '
         'compiling', () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'MixedHolder')
       abstract class MixedHolderImpl {
         final String label;
@@ -1276,7 +1267,7 @@ $generated''');
         MixedHolderImpl(this._secret, {required this.label});
       }
       ''');
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'MixedHolder')
 abstract class MixedHolderImpl {
   final String label;
@@ -1291,7 +1282,7 @@ $generated''');
     // `_count` оба порождают параметр конструктора `count` → build error.
     test('C-private-5: public field + private field with same stripped name → '
         'collision error', () async {
-      final result = await _runResult(packageConfig, headers, '''
+      final result = await runBuilderResult(packageConfig, headers, '''
       @Store(name: 'CollideStore')
       abstract class CollideImpl {
         abstract int count;
@@ -1315,7 +1306,7 @@ $generated''');
     // СМЕШАННОЕ с приватным abstract-полем — regression guard на的组合у.
     test('C-private-6: private concrete + private abstract mixed → compiling',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'Combo')
       abstract class ComboImpl {
         final int _id;
@@ -1323,7 +1314,7 @@ $generated''');
         ComboImpl(this._id);
       }
       ''');
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'Combo')
 abstract class ComboImpl {
   final int _id;
@@ -1339,7 +1330,7 @@ $generated''');
     // E2: поле состоит только из подчёркиваний → нет публичной формы параметра.
     // Должна быть понятная ошибка кодогенерации, а не битый код до форматтера.
     test('E2: underscore-only field name → clear codegen error', () async {
-      final result = await _runResult(packageConfig, headers, '''
+      final result = await runBuilderResult(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         abstract int _;
@@ -1362,7 +1353,7 @@ $generated''');
     // имя параметра → `private_named_non_field_parameter`. Проверяем компиляцию.
     test('E3: double-underscore private field → public param, compiling',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         abstract int __count;
@@ -1370,7 +1361,7 @@ $generated''');
       ''');
       expect(generated, contains('required int count'));
       expect(generated, contains('final Signal<int> __count\$'));
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'S')
 abstract class SImpl {
   abstract int __count;
@@ -1384,7 +1375,7 @@ $generated''');
     // а не в алфавитном порядке полей — иначе тихая перестановка значений.
     test('E4: two private concrete positional fields → super args in formal order',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         final int _b;
@@ -1395,7 +1386,7 @@ $generated''');
       // Параметры отсортированы по имени (a, b), но super(...) — в порядке
       // формалов (_b → b, _a → a).
       expect(generated, contains('super(b, a)'));
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'S')
 abstract class SImpl {
   final int _b;
@@ -1413,7 +1404,7 @@ $generated''');
     // Генератор НЕ добавляет его в конструктор и НЕ требует super-формала.
     test('V2-1: inline-initialized concrete fields are not constructor params',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         final int a = 5;
@@ -1435,7 +1426,7 @@ $generated''');
           isNot(contains('Signal<int> a')),
         ]),
       );
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'S')
 abstract class SImpl {
   final int a = 5;
@@ -1451,7 +1442,7 @@ $generated''');
     // Dart даёт null по умолчанию, поле компилируется без ctor. Пропускаем.
     test('V2-2: non-final nullable field without initializer is skipped',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         int? d;
@@ -1462,7 +1453,7 @@ $generated''');
       expect(generated, contains('S({required int count})'));
       expect(generated, isNot(contains('super.d')));
       expect(generated, isNot(contains('super.e')));
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'S')
 abstract class SImpl {
   int? d;
@@ -1476,7 +1467,7 @@ $generated''');
     // V2-3: `final int? e;` БЕЗ инициализатора — final требует установки (Dart
     // не даёт default). По-прежнему отклоняется C4 (нужен initializing-formal).
     test('V2-3: final nullable field without initializer → C4 error', () async {
-      final result = await _runResult(packageConfig, headers, '''
+      final result = await runBuilderResult(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         final int? e;
@@ -1493,7 +1484,7 @@ $generated''');
     // Self-sufficient пропускается, ctor-поле пробрасывается через super.
     test('V2-4: mixed self-sufficient + ctor concrete + reactive → compiling',
         () async {
-      final generated = await _run(packageConfig, headers, '''
+      final generated = await runBuilder(packageConfig, headers, '''
       @Store(name: 'S')
       abstract class SImpl {
         final int a = 5;
@@ -1509,7 +1500,7 @@ $generated''');
           isNot(contains('super.a')),
         ]),
       );
-      await _expectCompiles(headers, '''
+      await expectCompiles(headers, '''
 @Store(name: 'S')
 abstract class SImpl {
   final int a = 5;
@@ -1521,86 +1512,125 @@ abstract class SImpl {
 $generated''');
     });
   });
+
+  // --- @Store(root: true): авторегистрация в StoreRootScope + единый dispose ---
+
+  group('@Store(root: true)', () {
+    test('root store constructor registers itself in StoreRootScope', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('class AppStore extends AppStoreImpl'),
+          contains('StoreRootScope.register(this)'),
+        ]),
+      );
+      await expectCompiles(headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
 }
 
-/// Пустые BuilderOptions для тестов — generator не параметризуется.
-const _testOptions = BuilderOptions({});
+$generated''');
+    });
 
-/// Запускает builder и возвращает сгенерированную часть как строку.
-///
-/// `SharedPartBuilder` пишет в `<source>.store_generator.g.part`, а не в
-/// финальный `.g.dart` (последний собирается `combining_builder`'ом, который
-/// не запускается в изолированном `testBuilder`). Поэтому читаем именно part.
-///
-/// Бросает проверку, если сборка не удалась или актив не сгенерирован —
-/// для позитивных кейсов это и есть искомое поведение.
-Future<String> _run(
-  PackageConfig packageConfig,
-  String headers,
-  String body,
-) async {
-  final result = await _runResult(packageConfig, headers, body);
-  expect(result.succeeded, true,
-      reason: 'Ожидалась успешная сборка, но получили ошибки:\n'
-          '${result.errors.join('\n')}');
-  // SharedPartBuilder пишет скрытый part-файл; берём единственный output.
-  expect(result.outputs, hasLength(1),
-      reason: 'Ожидался ровно один сгенерированный актив.');
-  return result.readerWriter.readAsString(result.outputs.single);
+    test('non-root store has no registration call', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'LeafStore')
+        abstract class LeafImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(generated, isNot(contains('StoreRootScope')));
+    });
+
+    test('every @Store emits dispose() disposing signals', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'S')
+        abstract class SImpl {
+          abstract int a;
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('void dispose()'),
+          contains('a\$.dispose()'),
+        ]),
+      );
+    });
+
+    test('root store dispose() unregisters itself', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+        }
+        ''',
+      );
+      expect(generated, contains('StoreRootScope.unregister(this)'));
+    });
+
+    // root store + пользовательский concrete dispose: проверяет полный порядок
+    // super.dispose() → диспоз сигналов → unregister(this).
+    test('root store with concrete dispose: super first, then unregister', () async {
+      final generated = await runBuilder(
+        packageConfig,
+        headers,
+        '''
+        @Store(name: 'AppStore', root: true)
+        abstract class AppStoreImpl {
+          abstract int count;
+          void dispose() {
+            // пользовательская логика перед диспозом сигналов
+          }
+        }
+        ''',
+      );
+      expect(
+        generated,
+        allOf([
+          contains('@override'),
+          contains('void dispose() {'),
+          contains('super.dispose();'),
+          contains('count\$.dispose()'),
+          contains('StoreRootScope.unregister(this)'),
+        ]),
+      );
+      // Порядок: super ПЕРВЫМ, unregister ПОСЛЕ диспоза сигналов.
+      final disposeBlock = generated.substring(generated.indexOf('void dispose()'));
+      expect(disposeBlock.indexOf('super.dispose();'),
+          lessThan(disposeBlock.indexOf('count\$.dispose()')));
+      expect(disposeBlock.indexOf('count\$.dispose()'),
+          lessThan(disposeBlock.indexOf('unregister')));
+      await expectCompiles(headers, '''
+@Store(name: 'AppStore', root: true)
+abstract class AppStoreImpl {
+  abstract int count;
+  void dispose() {}
 }
 
-/// Низкоуровневый запуск: возвращает полный результат сборки.
-Future<TestBuilderResult> _runResult(
-  PackageConfig packageConfig,
-  String headers,
-  String body,
-) {
-  return testBuilder(
-    storeBuilder(_testOptions),
-    {
-      'a|lib/store.dart': '$headers\n$body',
-    },
-    packageConfig: packageConfig,
-    // Предзагружаем источники внешних пакетов (аннотация, signals), чтобы
-    // резолвер раскрыл `@Store` во входной библиотеке.
-    readerWriter: createDependencyReader(packageConfig),
-    // Делаем скрытые part-выходы SharedPartBuilder читаемыми по логическому ID.
-    flattenOutput: true,
-  );
-}
-
-/// Проверяет, что сгенерированный код КОМПИЛИРУЕТСЯ, запуская `dart analyze`.
-///
-/// Это строгая проверка, которую `contains`-матчеры дать не могут: они ловят
-/// подстроки, но пропускают некомпилируемый код (как регрессия приватных полей —
-/// `required int _count` выглядел правильно, но нарушал
-/// `private_named_non_field_parameter`).
-///
-/// [headers] — импорты (аннотация + signals), [body] — полный исходник: декларация
-/// `@Store`-класса + сгенерированный подкласс в одной библиотеке (как part-file).
-/// Код пишется во временный файл в `lib/` (чтобы резолвились зависимости пакета),
-/// анализируется, файл удаляется. Допускаются warnings/info (например,
-/// `unused_element` для приватных полей) — важны только ERRORS.
-Future<void> _expectCompiles(String headers, String body) async {
-  final file = File('lib/_codegen_compile_check.dart');
-  await file.writeAsString('$headers\n$body');
-  try {
-    final result = await Process.run(
-      'dart',
-      // --no-fatal-warnings: warnings (unused_field, unused_element) не валидны
-      // для smoke-теста — нас интересуют только ERRORS (незаконный код).
-      ['analyze', file.path, '--no-fatal-warnings'],
-    );
-    expect(
-      result.exitCode,
-      0,
-      reason: 'Сгенерированный код должен компилироваться (0 ошибок), но '
-          '`dart analyze` завершился с кодом ${result.exitCode}:\n'
-          '--- stdout ---\n${result.stdout}\n'
-          '--- stderr ---\n${result.stderr}\n'
-          '--- проверяемый код ---\n$body',
-    );
-  } finally {
-    if (file.existsSync()) await file.delete();
-  }
+$generated''');
+    });
+  });
 }

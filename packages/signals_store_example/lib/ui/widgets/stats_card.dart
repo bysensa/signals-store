@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:signals_flutter/signals_flutter.dart';
 
-import '../derived.dart';
+import '../../domain/stores.dart';
 
 /// Карточка статистики: всего / активно / выполнено / просрочено.
 ///
@@ -10,13 +10,13 @@ import '../derived.dart';
 class StatsCard extends StatelessWidget {
   const StatsCard({super.key, required this.derived});
 
-  final Derived derived;
+  final TodosDerived derived;
 
   @override
   Widget build(BuildContext context) {
     return SignalBuilder(
       builder: (context) {
-        final stats = derived.todoStats.value;
+        final stats = derived.todoStats;
         return Card(
           margin: const EdgeInsets.all(12),
           child: Padding(
