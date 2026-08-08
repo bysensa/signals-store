@@ -75,6 +75,30 @@ value to the declared type — this gives a **runtime type-check** for free, eve
 if the value was written through an untyped path (a serializer, a reflection
 mapper).
 
+## StoreRootScope: resolving the store-tree root
+
+`StoreRootScope` is a registry for the root of a store tree. A store annotated
+[`@Store(root: true)`](../signals_store_generator) auto-registers itself here
+on construction (and unregisters on `dispose()`); derived stores
+([`@DerivedStore`](../signals_store_annotation)) resolve it by type via
+`StoreRootScope.of<T>()` — anywhere, without passing a reference.
+
+```dart
+// In main() — plain or under runZonedGuarded:
+final store = AppStore(/* ... */); // auto-registers (root: true)
+
+// Anywhere else (e.g. a screen's derived store):
+final root = StoreRootScope.of<AppStoreImpl>();
+```
+
+- **Environment detection is automatic** — `Platform.environment['FLUTTER_TEST']`
+  selects a per-zone registry for tests (auto-isolation via the test runner's
+  per-test zones) or a single global registry for the app. No manual flag, no
+  `setUpAll`, and it works under `runZonedGuarded`.
+- **Roots are held via `WeakReference`** — the scope never keeps a store alive;
+  `of<T>()` prunes dead entries in flight, and a root store's `dispose()` calls
+  `unregister` for deterministic cleanup.
+
 ## Limitations
 
 ### 1. Symbol-normalization cache

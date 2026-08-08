@@ -1,3 +1,7 @@
+## 0.3.1
+
+- **Docs**: document `@Store(root: true)` and `@DerivedStore` in the README.
+
 ## 0.3.0
 
 - **Feature**: added `@Store(root: true)` flag — the store auto-registers itself

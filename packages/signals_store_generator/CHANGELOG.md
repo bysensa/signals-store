@@ -1,3 +1,8 @@
+## 0.6.1
+
+- **Docs**: document `@Store(root: true)` and `@DerivedStore` in the README
+  (root store, derived stores, per-library `part of` constraint).
+
 ## 0.6.0
 
 - **Feature (`@Store(root: true)`)**: a store annotated `@Store(root: true)`
