@@ -7,6 +7,7 @@ import 'package:signals_store/signals_store.dart';
 
 part 'stores.g.dart';
 part 'derived_stores.dart';
+part 'todo_details_store.dart';
 
 /// Глобальное дерево сторов по образцу Overmind.
 ///
