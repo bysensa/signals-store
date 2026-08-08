@@ -16,10 +16,10 @@
 - **FN-vs-FP**: детектор реактивности не меняется по существу — только добавляется имя root-геттера в базу. Регрессионные тесты `reactivity_test.dart` должны оставаться зелёными.
 - **Переиспользование генератора (требование):** `@Store` и `@DerivedStore` идут через единый приватный эмиттер `_emitStoreClass`; дублирование логики полей/геттеров/конструктора/коллизий между ними запрещено. Любой новый кейс-обработчик должен лечь в `_emitStoreClass` с флагом, а не в отдельную копию.
 - **`dispose()` едино для `@Store` и `@DerivedStore`:** `_emitStoreClass` всегда эмитит `dispose()` (Signal/Computed). `@Store(root: true)` дополнительно снимает регистрацию (`StoreRootScope.unregister(this)`).
+- **Детект окружения через env-var:** `Platform.environment['FLUTTER_TEST']` (runtime, выставляется `flutter test` автоматически). Никакого `static bool`/`enableTestMode`/zone-маркера/bootstrap. App (включая `runZonedGuarded`) → единый реестр; тест → per-zone (изоляция через зоны раннера). Web не заявлен (pubspec требует Flutter SDK); при web-цели — fallback через `--dart-define`.
 - **`WeakReference` против циклов:** `StoreRootScope` хранит корни только через `WeakReference` — никогда сильной ссылкой. Это снятое требование, а не оптимизация.
-- **Безфлаговый детект окружения:** никакого `static bool _testMode` / `enableTestMode`. Окружение определяется по `Zone.current == Zone.root` или маркеру `appMarker` в parent-chain; тесты попадают в per-zone реестр автоматически (эмпирически подтверждено в Task 2). App с `runZonedGuarded` — одна строка `zoneValues: {StoreRootScope.appMarker: true}`.
 - **Комментарии/документация** — на русском, в стиле существующих докстринг.
-- **Verify-before-planning**: гипотезы зон проверены при дизайне (Task 2 = регресс-зонды), не «до».
+- **Verify-before-claiming**: гипотезы (env-var, per-test зоны, dispose signals) проверены зондами при дизайне; Task 2 фиксирует их как регрессию.
 
 ## Ссылка на дизайн
 
@@ -177,11 +177,9 @@ git commit -m "feat(annotation): add @Store(root: true) flag and @DerivedStore a
 ### Task 2: Регресс-зонды зон (verify-before-planning — подтверждено при дизайне)
 
 **Цель:** при дизайне эмпирически подтверждено (см. спеку «Эмпирические проверки»):
-1. package:test создаёт отдельный `Zone.current` на каждый тест;
-2. `Zone.operator[]` ходит по parent-chain (zone-values предков видны потомку).
-Эти факты — основа автодетекта окружения в Task 3 (без флага). Задача —
-зафиксировать их как регресс-тест, чтобы будущие изменения раннера/SDK не сломали
-дизайн тихо.
+1. `Platform.environment['FLUTTER_TEST']` выставляется `flutter test` автоматически (runtime env-var); `bool.fromEnvironment('FLUTTER_TEST')` под `flutter test` даёт **false**.
+2. package:test создаёт отдельный `Zone.current` на каждый тест (per-test изоляция).
+Эти факты — основа детекта окружения в Task 3. Задача — зафиксировать их как регресс-тест.
 
 **Files:**
 - Create: `packages/signals_store/test/zone_probe_test.dart`
@@ -191,37 +189,29 @@ git commit -m "feat(annotation): add @Store(root: true) flag and @DerivedStore a
 `packages/signals_store/test/zone_probe_test.dart`:
 
 ```dart
-// Регресс-зонды Zone-поведения под flutter test.
-// Гипотезы StoreRootScope (безфлагового детекта окружения):
-//   A: тело теста всегда в дочерней зоне, отличной от Zone.root;
-//   B: соседние тесты имеют разные Zone.current (per-test изоляция);
-//   C: Zone.operator[] наследует zone-values предков (parent-chain lookup).
+// Регресс-зонды для StoreRootScope:
+//   A: Platform.environment['FLUTTER_TEST'] присутствует под flutter test;
+//   B: тело теста в дочерней зоне (!= Zone.root), соседние тесты — разные зоны.
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:test/test.dart';
 
 void main() {
-  // A + B: тело теста не в root, соседние тесты — разные зоны.
-  test('probe A: test body zone is NOT root', () {
+  test('probe A: FLUTTER_TEST env-var present', () {
+    expect(Platform.environment.containsKey('FLUTTER_TEST'), isTrue);
+  });
+
+  test('probe B: test body zone is NOT root', () {
     expect(identical(Zone.current, Zone.root), isFalse);
   });
 
-  test('probe B: per-test distinct zones', () {
+  test('probe B2: per-test distinct zones', () {
     _zones.add(Zone.current);
   });
-  test('probe B2: per-test distinct zones (cross-check)', () {
+  test('probe B3: per-test distinct zones (cross-check)', () {
     _zones.add(Zone.current);
     expect(_zones.map((z) => z.hashCode).toSet().length, _zones.length,
         reason: 'соседние тесты должны иметь разные зоны');
-    expect(_zones.any((z) => identical(z, Zone.root)), isFalse);
-  });
-
-  // C: zone-values предка видны потомку через operator[].
-  test('probe C: parent-chain zone-value lookup', () {
-    final key = #probe_c;
-    final child = Zone.current.fork(zoneValues: {key: 'child-val'});
-    child.run(() {
-      expect(Zone.current[key], 'child-val');
-    });
   });
 }
 
@@ -256,12 +246,11 @@ git commit -m "test(signals_store): regression probes for zone-based scope detec
 
 **Interfaces:**
 - Produces:
-  - `StoreRootScope.appMarker` (`Object`, `const #signals_store_app`) — маркер app-окружения для zone-values (нужен только при `runZonedGuarded` в main).
   - `StoreRootScope.register(Object root)` — пишет в активное окружение через **`WeakReference`**; превентивно чистит мёртвые weak-записи.
   - `StoreRootScope.of<T>()` → `T` — резолв по типу (`is T`-скан по weak-ссылкам); убирает мёртвые записи влетую; `StateError` если не найден.
   - `StoreRootScope.unregister(Object root)` — явное удаление weak-записи (из dispose root-стора).
   - `StoreRootScope.resetCurrentZone()` (`@visibleForTesting`) — опциональная очистка per-zone реестра.
-- **Окружение детектится автоматически** (без флага): `Zone.current == Zone.root` или `Zone.current[appMarker] == true` → app; иначе → per-zone test-реестр.
+- **Окружение детектится автоматически по `Platform.environment['FLUTTER_TEST']`** (без флага/маркера/bootstrap): тест → per-zone реестр (изоляция через зоны раннера); app → единый реестр (независимо от `runZonedGuarded`).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -335,40 +324,36 @@ Expected: FAIL — `StoreRootScope` undefined / export missing.
 
 - [ ] **Step 3: Реализовать `scope.dart`**
 
-`packages/signals_store/lib/src/scope.dart` — безфлаговый детект по зоне:
+`packages/signals_store/lib/src/scope.dart` — детект по env-var (без флага/маркера):
 
 ```dart
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:meta/meta.dart';
 
-/// Глобальный реестр корня дерева сторов с автодетектом окружения по зоне.
+/// Глобальный реестр корня дерева сторов с детектом окружения по env-var.
 ///
 /// Окружение определяется автоматически (без флага и ручного включения):
-/// - **App:** типичный `main()` стартует в [Zone.root]; app с `runZonedGuarded`
-///   помечает свою зону через [appMarker] (одна строка в main).
-/// - **Test:** тело теста всегда в дочерней зоне без app-маркера (package:test /
-///   flutter_test форкают зону на тест) → автоматически per-zone реестр с
-///   автоизоляцией между тестами.
+/// - **Тест:** `flutter test` выставляет `Platform.environment['FLUTTER_TEST']`
+///   → per-zone реестр (изоляция через per-test зоны раннера).
+/// - **App** (plain или с `runZonedGuarded`): переменная отсутствует → единый
+///   глобальный реестр, независимо от топологии зон приложения.
 ///
-/// Окружения не пересекаются: test-регистрации никогда не попадают в app-реестр
-/// и наоборот.
+/// Окружения не пересекаются.
 ///
 /// **Циклы удержания:** реестр хранит корни ТОЛЬКО через [WeakReference].
-/// Стор удерживается обычными ссылками приложения (дерево, State); scope его
-/// не держит. Корневой стор в [dispose] снимает регистрацию через [unregister]
-/// — детерминизм для тестов вместо ожидания GC.
+/// Стор удерживается обычными ссылками приложения; scope его не держит.
+/// Корневой стор в [dispose] снимает регистрацию через [unregister] —
+/// детерминизм для тестов вместо ожидания GC.
 class StoreRootScope {
   StoreRootScope._();
 
-  /// Маркер app-окружения для zone-values. Нужен только если приложение
-  /// оборачивает `main` в `runZonedGuarded` (crash-reporting и т.п.):
-  ///
-  /// ```
-  /// runZoned(() => runApp(...),
-  ///     zoneValues: {StoreRootScope.appMarker: true}, ...);
-  /// ```
-  static const Object appMarker = #signals_store_app;
+  // `flutter test` автоматически выставляет FLUTTER_TEST (runtime env-var).
+  // bool.fromEnvironment('FLUTTER_TEST') под flutter test даёт false —
+  // проверено; нужен явный --dart-define. Поэтому runtime env-var.
+  static final bool _isTest =
+      Platform.environment.containsKey('FLUTTER_TEST');
 
   static final _Registry _appRegistry = _Registry();
   static final Expando<_Registry> _testByZone = Expando();
@@ -399,17 +384,14 @@ class StoreRootScope {
   /// зоны раннера уже изолируют.
   @visibleForTesting
   static void resetCurrentZone() {
-    final reg = _testByZone[Zone.current];
-    reg?.clear();
+    _testByZone[Zone.current]?.clear();
   }
 
   static _Registry _active() {
-    // operator[] ходит по parent-chain: маркер виден всему app-подграфу.
-    if (identical(Zone.current, Zone.root) ||
-        Zone.current[appMarker] == true) {
-      return _appRegistry;
+    if (_isTest) {
+      return _testByZone[Zone.current] ??= _Registry();
     }
-    return _testByZone[Zone.current] ??= _Registry();
+    return _appRegistry;
   }
 }
 
@@ -1404,7 +1386,7 @@ import 'package:signals/signals.dart';
 import 'package:test/test.dart';
 
 void main() {
-  // Окружение детектится автоматически по зоне — без enableTestMode.
+  // Окружение детектится автоматически по FLUTTER_TEST — без enableTestMode.
   tearDown(StoreRootScope.resetCurrentZone); // опциональная страховка
 
   AppStore _newStore() => AppStore(
@@ -1518,13 +1500,15 @@ git commit -m "chore: derived stores feature complete"
 
 **Placeholder scan:** единственный `UnimplementedError` в Task 6 Step 1 — осознанный указатель на рефакторинг (Step 2), реальный helper `expectCompiles`.
 
-**Type consistency:** `StoreRootScope.{appMarker,register,of,unregister,resetCurrentZone}` (Task 3, без флага) используются в Tasks 4,6,8,9; `@Store(root: true)`/`@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
+**Type consistency:** `StoreRootScope.{register,of,unregister,resetCurrentZone}` (Task 3, детект по env-var) используются в Tasks 4,6,8,9; `@Store(root: true)`/`@DerivedStore` (Task 1) — в Tasks 4,6,8; `rootMemberName`/`rootTypeStr` (Task 6) согласованы в `_emitStoreClass`.
+
+**Env-var detection:** окружение определяется по `Platform.environment['FLUTTER_TEST']` (Task 3 Step 3). Тесты автоматически → per-zone реестр (Task 2 подтвердил per-test зоны + наличие FLUTTER_TEST). App (включая `runZonedGuarded`) → единый реестр, без маркера/bootstrap. `bool.fromEnvironment` отвергнут (даёт false под flutter test — проверено).
 
 **Безфлаговый детект окружения:** окружение определяется по `Zone.current == Zone.root` (или `appMarker` в parent-chain через `operator[]`) — без `static bool`. Тесты автоматически per-zone (Task 2 подтвердил per-test зоны). App с `runZonedGuarded` — маркер в zone-values (документируется). `enableTestMode` устранён.
 
 **Риски/допущения для реализующего агента:**
 - Конкретные номера строк в `store_generator.dart` даны приблизительно (файл 712 строк) — ориентироваться по сигнатурам/комментариям, не по номерам.
-- Гипотезы зон (Task 2) подтверждены при дизайне под package:test; если при запуске регресс-зондов под конкретной версией раннера они упадут — пересмотреть `_active()` (вероятно, вернуть опциональный маркер для app).
-- `WeakReference` в Dart не даёт детерминированного GC-теста; тест «weak ref» (если останется) моделирует эффект через `unregister`. Не полагаться на `gc()` — его нет в стабильном API.
-- `of<T>` «последний wins»: при нескольких регистрациях одного типа возвращается последнее совпадание по `is T` — задокументировано в Task 3 Step 3.
-- App с `runZonedGuarded` без маркера `appMarker` → регистрации уйдут в per-zone test-реестр и не будут видны UI в другой зоне → `StateError`. Документировать prominently в README/runtime-doc.
+- Гипотезы (FLUTTER_TEST env-var, per-test зоны) подтверждены при дизайне; Task 2 — регресс-зонды. Если под конкретной версией раннера зонды упадут — пересмотреть `_active()`.
+- `dart:io` недоступен на web; signals_store требует Flutter SDK (web не заявлен). При web-цели — fallback через `bool.fromEnvironment('IS_TEST')` + `--dart-define=IS_TEST=true` (документировать).
+- `WeakReference` в Dart не даёт детерминированного GC-теста; цикл удержания тестируется через `unregister`/replace-по-типу, не через принудительный GC.
+- `of<T>` «последний wins»: при нескольких регистрациях одного типа возвращается последнее совпадание по `is T`.

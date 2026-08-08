@@ -170,23 +170,22 @@ class TodoDetailsStore extends TodoDetailsStoreImpl {
 
 ## StoreRootScope (runtime, signals_store)
 
-Реестр корня с **автодетектом окружения по зоне** — никакого глобального флага
-и ручного включения. Окружения не пересекаются: test-регистрации никогда не
-попадают в app-реестр и наоборот.
+Реестр корня с **детектом окружения через env-var** — никакого флага, маркера
+зоны или ручного bootstrap. Окружения не пересекаются: test-регистрации никогда
+не попадают в app-реестр и наоборот.
 
-Принцип детекции (по `Zone.current` + parent-chain, без `static bool`):
-- **Типичный app** стартует в `Zone.root` → app-окружение.
-- **App с `runZonedGuarded`** (crash-reporting и т.п.) — `Zone.current != root`,
-  но в parent-chain нет app-маркера → единственный случай, требующий явного
-  маркера: `runZoned(..., zoneValues: {StoreRootScope.appMarker: true})`.
-- **Тесты** всегда в дочерней зоне без app-маркера (package:test / flutter_test
-  форкают зону на каждый тест — подтверждено эмпирически) → автоматически
-  test-окружение с per-zone реестром → автоизоляция.
+Принцип детекции:
+- **Тест** — детектится по `Platform.environment['FLUTTER_TEST']` (автоматически
+  выставляется `flutter test`, runtime, не требует `--dart-define`). Подтверждено
+  эмпирически.
+- **App** (plain `runApp` или с `runZonedGuarded`) — переменная отсутствует →
+  единый глобальный реестр. Топология зон приложения на резолв **не влияет**,
+  поэтому `runZonedGuarded` работает без каких-либо действий.
 
 ```dart
 class StoreRootScope {
-  // Маркер app-окружения для zone-values (нужен только при runZonedGuarded).
-  static const Object appMarker = #signals_store_app;
+  static final bool _isTest =
+      Platform.environment.containsKey('FLUTTER_TEST');
 
   static final _Registry _appRegistry = _Registry();
   static final Expando<_Registry> _testByZone = Expando();
@@ -202,45 +201,46 @@ class StoreRootScope {
   static void unregister(Object root);
 
   /// Очищает per-zone реестр текущей зоны (tearDown). Опционально: per-test
-  /// зоны раннера уже изолируют, явный сброс нужен лишь при общей зоне файла.
+  /// зоны раннера уже изолируют.
   @visibleForTesting
   static void resetCurrentZone();
 
-  // Детекция окружения:
   static _Registry _active() {
-    // app: типичный main в Zone.root, ИЛИ zone-values-маркер в цепочке
-    // (operator[] ходит по parent-chain — подтверждено эмпирически).
-    if (identical(Zone.current, Zone.root) ||
-        Zone.current[appMarker] == true) {
-      return _appRegistry;
+    if (_isTest) {
+      // per-test зоны раннера (package:test/flutter_test) → автоизоляция.
+      return _testByZone[Zone.current] ??= _Registry();
     }
-    // test: дочерняя зона без app-маркера → per-zone реестр.
-    return _testByZone[Zone.current] ??= _Registry();
+    return _appRegistry;
   }
 }
 ```
 
-- **Почему без флага:** `Zone.current == Zone.root` надёжно отличает типичный
-  app от теста; `operator[]` ищет маркер по всей parent-chain без ручного
-  обхода; runZonedGuarded — единственный случай, требующий маркера.
-- **Тестам ничего делать не нужно:** тело теста всегда в дочерней зоне
-  (эмпирически — package:test создаёт зону на тест) → автоматически test.
+- **Почему env-var, а не зона/маркер/флаг:** `Platform.environment['FLUTTER_TEST']`
+  — единственный сигнал, который надёжно отличает тест от app **и** не зависит
+  от топологии зон приложения. Зон-маркер ломался на `runZonedGuarded`;
+  `Zone.current == Zone.root` — то же; compile-time `bool.fromEnvironment(
+  'FLUTTER_TEST')` под `flutter test` даёт **false** (проверено), нужен явный
+  `--dart-define`. Runtime env-var работает автоматически.
+- **Тестам ничего делать не нужно:** `flutter test` выставляет переменную →
+  детект → per-zone реестр → изоляция через зоны раннера.
+- **App (включая `runZonedGuarded`):** переменная отсутствует → `_appRegistry`,
+  без разницы, в какой зоне живёт app-код.
 - **Авторегистрация:** конструктор стора с `@Store(root: true)` пишет в активное
-  окружение через `StoreRootScope.register(this)`. В тесте — per-zone реестр,
-  в приложении — глобальный. `main.dart` не меняется.
-- **App с `runZonedGuarded`:** обернуть `runZoned(() { runApp(...); },
-  zoneValues: {StoreRootScope.appMarker: true}, ...)` — одна строка,
-  документируется.
+  окружение через `StoreRootScope.register(this)`. `main.dart` не меняется.
+- **Web-платформа:** `dart:io` недоступен; signals_store требует Flutter SDK
+  (web не заявлен). При необходимости web-цели — добавить `--dart-define=
+  IS_TEST=true` и компилировать `_isTest` из `bool.fromEnvironment` (fallback).
 
 ### Эмпирические проверки (проверено при дизайне)
 
-1. **package:test / flutter_test создают зону на каждый тест** — ✅ проверено
-   (зонд: тело теста всегда в дочерней зоне, отличной от `Zone.root`, и
-   соседние тесты имеют разные зоны). Отсюда автоизоляция test-окружения без
-   `tearDown`. Регресс-тест (зонд) включается в план.
-2. **`Zone.operator[]` ходит по parent-chain** — ✅ проверено (zone-values
-   предков видны потомку). Отсюда один маркер в zone-values покрывает весь
-   app-подграф, включая `runZonedGuarded`.
+1. **`Platform.environment['FLUTTER_TEST']` выставляется `flutter test`**
+   автоматически (runtime env-var, не dart-define) — ✅ проверено зондом.
+   `bool.fromEnvironment('FLUTTER_TEST')` под `flutter test` даёт **false**
+   (✅ проверено) — compile-time константу нужно выставлять `--dart-define`
+   явно. Отсюда выбор runtime env-var.
+2. **package:test / flutter_test создают зону на каждый тест** — ✅ проверено
+   (тело теста в дочерней зоне, соседние тесты — разные зоны). Отсюда
+   автоизоляция test-окружения через per-zone реестр. Регресс-зонд в плане.
 3. Поведение signals после `dispose()` — проверяется при реализации
    (зафиксировать фактическое поведение для документации).
 
@@ -308,9 +308,9 @@ Root-статус — **явная маркировка**, а не вывод и
 ## Тестирование
 
 - Юнит-тесты derived: тест создаёт `AppStore(...)` (авторегистрация пишет в
-  test-окружение — детектится автоматически по зоне, без `enableTestMode`) →
-  создаёт derived → assert. Изоляция per-test — через зоны раннера
-  автоматически; `resetCurrentZone()` в tearDown опционален.
+  test-окружение — детектится автоматически по `FLUTTER_TEST`, без
+  `enableTestMode`) → создаёт derived → assert. Изоляция per-test — через зоны
+  раннера автоматически; `resetCurrentZone()` в tearDown опционален.
 - Подмена корня: `StoreRootScope.register(fakeExtendsAppStoreImpl)` — резолв
   по `is T` найдёт фейк.
 - Тесты генератора: contains-матчеры + обязательный `dart analyze` на
@@ -345,10 +345,14 @@ Root-статус — **явная маркировка**, а не вывод и
   ломает derived на этапе кодогенерации; тип не может быть одновременно
   корнем и подстором. Заменено явной маркировкой `@Store(root: true)`.
 - **`static bool _testMode` + ручное `enableTestMode()`** — лишний boilerplate
-  (забыл в одном файле — баг) и глобальное состояние. Заменено автодетектом по
-  зоне: типичный app в `Zone.root`, тесты — в дочерней зоне (эмпирически всегда);
-  единственный нестандартный случай (`runZonedGuarded` в main) — маркер в
-  zone-values, не флаг.
+  и глобальное состояние. Заменено детектом по `Platform.environment['FLUTTER_TEST']`.
+- **Зона-маркер / `Zone.current == Zone.root` для детекта app** — ломается на
+  `runZonedGuarded` (crash-reporting в main): app-код в дочерней зоне
+  детектится как тест → регистрации уходят в пустой per-zone реестр →
+  `StateError`. Заменено env-var (не зависит от топологии зон).
+- **`bool.fromEnvironment('FLUTTER_TEST')`** — compile-time константа; под
+  `flutter test` даёт **false** (проверено), нужен явный `--dart-define`.
+  Runtime env-var работает автоматически — выбран он.
 - **Хук `onDispose()`** — лишняя конвенция имени; заменён естественным
   override: impl объявляет `dispose()`, генератор вызывает `super.dispose()`
   первым.
