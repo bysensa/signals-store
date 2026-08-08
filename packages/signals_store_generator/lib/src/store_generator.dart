@@ -112,6 +112,48 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     Map<String, String> implToStoreName,
     Set<String> storeImplNames,
   ) async {
+    final storeName = annotation.read('name').stringValue;
+    final isAbstract = annotation.peek('abstract')?.boolValue ?? false;
+    final isRoot = annotation.peek('root')?.boolValue ?? false;
+    return _emitStoreClass(
+      element,
+      storeName,
+      isAbstract,
+      isRoot,
+      implToStoreName,
+      storeImplNames,
+      const <String>{},
+      isDerived: false,
+    );
+  }
+
+  /// Эмитит тело класса-стора (поля/геттеры/конструктор/коллизии/dispose).
+  ///
+  /// Общий эмиссор для `@Store` и (в Task 6) `@DerivedStore`: всё, что не зависит
+  /// от типа аннотации, живёт здесь. На данном этапе `isDerived` всегда `false`,
+  /// а `rootMemberName`/`rootTypeStr`/`rootImplNames` не используются — их
+  /// наполнит Task 6 для производных сторов.
+  ///
+  /// [implToStoreName] / [storeImplNames] — карта impl→имя реализации и множество
+  /// impl-имён (для типизации подсторов и реактивности). [rootImplNames] —
+  /// множество impl-имён корневых сторов (Task 6: производный стор типизирует
+  /// ссылку на корень по его impl-имени).
+  Future<String?> _emitStoreClass(
+    Element element,
+    String storeName,
+    bool isAbstract,
+    bool isRoot,
+    Map<String, String> implToStoreName,
+    Set<String> storeImplNames,
+    Set<String> rootImplNames, {
+    bool isDerived = false,
+    // Reserved for Task 6 (@DerivedStore): имя члена-корня и его тип.
+    // ignore: unused_element_parameter
+    String? rootMemberName,
+    // Reserved for Task 6 (@DerivedStore): имя члена-корня и его тип.
+    // ignore: unused_element_parameter
+    String? rootTypeStr,
+  }) async {
     // Store применим только к классам.
     if (element is! ClassElement) {
       final name = element.name;
@@ -145,15 +187,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       );
     }
 
-    final storeName = annotation.read('name').stringValue;
-    // `abstract: true` → генерируем `abstract class` (например, обобщённый
-    // базовый стор, чью конкретную реализацию пишет пользователь). По умолчанию
-    // `false` — конкретный класс.
-    final isAbstract = annotation.peek('abstract')?.boolValue ?? false;
-    // `root: true` → стор саморегистрируется в `StoreRootScope` (авторегистрация
-    // корня дерева сторов). Сгенерированный конструктор получает тело
-    // `{ StoreRootScope.register(this); }`, dispose снимает регистрацию.
-    final isRoot = annotation.peek('root')?.boolValue ?? false;
+    // Единая валидация сигнатуры пользовательского dispose() — общий хелпер,
+    // покрывающий и @Store, и @DerivedStore. Бросает понятную ошибку, если
+    // dispose объявлен не как no-argument void method.
+    _validateDisposeSignature(element);
 
     // Дублирующее определение реализации с тем же именем в одной библиотеке
     // дало бы compile error у потребителя — это нормально, лишних проверок не
@@ -487,8 +524,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // dispose() — единая механика для @Store и @DerivedStore.
     // Диспозит Signal/Computed-поля; для root-стора снимает регистрацию в
     // StoreRootScope. Если суперкласс уже объявил concrete `dispose()`,
-    // генерируем @override + super.dispose() — валидация сигнатуры
-    // пользовательского dispose (non-void/параметры) добавляется в Task 6.
+    // генерируем @override + super.dispose(). Валидация сигнатуры
+    // пользовательского dispose (non-void/параметры) — общий хелпер
+    // _validateDisposeSignature, вызывается выше единым местом (покрывает и
+    // @Store, и @DerivedStore).
     final disposeBuffer = StringBuffer();
     final hasConcreteDispose = element.methods.any(
       (m) => m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic &&
@@ -513,6 +552,34 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     buffer.writeln('}');
 
     return buffer.toString();
+  }
+
+  /// Валидирует сигнатуру пользовательского `dispose()`, если он объявлен в
+  /// [element] как origin (не унаследованный, не static) метод.
+  ///
+  /// dispose обязан быть no-argument void-методом: генератор эмитит
+  /// `@override void dispose() { ... super.dispose(); }`, что совместимо только
+  /// с такой сигнатурой. Non-void возврат или наличие параметров → понятная
+  /// ошибка кодогенерации. Общий хелпер для `@Store` и `@DerivedStore`: вызывается
+  /// из [_emitStoreClass] единым местом, поэтому валидация покрывает оба типа
+  /// аннотаций без дублирования.
+  void _validateDisposeSignature(ClassElement element) {
+    MethodElement? dispose;
+    for (final m in element.methods) {
+      if (m.name == 'dispose' && m.isOriginDeclaration && !m.isStatic) {
+        dispose = m;
+        break;
+      }
+    }
+    if (dispose == null) return;
+    final badSig = dispose.returnType is! VoidType ||
+        dispose.formalParameters.isNotEmpty;
+    if (badSig) {
+      throw InvalidGenerationSource(
+        'dispose() in "${element.name}" must be a no-argument void method.',
+        element: dispose,
+      );
+    }
   }
 
   /// Детектирует коллизии генерируемых имён (баги A2, A3).
