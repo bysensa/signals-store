@@ -49,9 +49,16 @@ class Store {
 /// Derived-стор идентичен `@Store` по всем механикам (abstract-поля → Signal,
 /// concrete-поля → pass-through, concrete-геттеры → Computed). Отличия:
 ///
-/// - обязательный `abstract`-геттер `root`, типизированный `@Store(root: true)`-
-///   impl'ом; генератор эмитит его реализацию через `StoreRootScope.of<T>()`;
+/// - обязательный геттер `root` **без тела** (bodyless), типизированный
+///   `@Store(root: true)`-impl'ом; генератор эмитит его реализацию через
+///   `StoreRootScope.of<T>()`. Ключевое слово `abstract` на членах запрещено
+///   Dart — bodyless-геттер в abstract-классе абстрактен по умолчанию;
 /// - сгенерированный `dispose()` для on-demand жизненного цикла (см. дизайн).
+///
+/// **Ограничение (per-library):** генератор резолвит тип root-геттера в рамках
+/// одной библиотеки, поэтому derived-стор и его root-стор (`@Store(root: true)`)
+/// должны быть в одной библиотеке. Чтобы разнести их по файлам, используйте
+/// `part`/`part of` — оба файла образуют одну библиотеку.
 ///
 /// На одном классе допускается ровно одна аннотация `@DerivedStore`;
 /// `@Store` и `@DerivedStore` на одном классе запрещены.
@@ -59,7 +66,7 @@ class Store {
 /// ```dart
 /// @DerivedStore(name: 'TodoDetailsStore')
 /// abstract class TodoDetailsStoreImpl {
-///   abstract AppStoreImpl get root;
+///   AppStoreImpl get root; // bodyless — генератор эмитит реализацию
 ///   abstract String todoId;
 ///   Todo? get todo => root.projects.todos[todoId];
 /// }
