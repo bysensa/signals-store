@@ -1,3 +1,7 @@
+## 0.3.1
+
+- **Docs**: document `StoreRootScope` in the README.
+
 ## 0.3.0
 
 - **Feature**: added `StoreRootScope` — the store-tree root registry with
