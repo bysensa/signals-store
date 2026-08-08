@@ -31,6 +31,11 @@ class StoreRootScope {
 
   /// Регистрирует [root] (слабо) в активном окружении. Повторная регистрация
   /// того же типа заменяет предыдущую. Превентивно чистит мёртвые weak-записи.
+  ///
+  /// Регистрация привязывается к [Zone.current]: derived-сторы, чьи Computed
+  /// выполняются в дочерних зонах (например, эффекты библиотеки signals под
+  /// `flutter test`), найдут корень через обход цепочки родительских зон в
+  /// [of] — см. `_lookupIn`.
   static void register(Object root) {
     final reg = _active();
     reg.purge();
@@ -38,11 +43,19 @@ class StoreRootScope {
   }
 
   /// Явное снятие регистрации — вызывается из dispose корневого стора.
+  ///
+  /// Снимает регистрацию в [Zone.current] (где [register] её и ставил).
   static void unregister(Object root) => _active().remove(root);
 
   /// Резолвит корень типа [T]. Бросает [StateError], если не зарегистрирован.
+  ///
+  /// Под `flutter test` (per-zone реестр) ищет по цепочке зон от [Zone.current]
+  /// вверх до корня: корень, зарегистрированный в родительской зоне (тело
+  /// теста), виден дочерним зонам (эффекты signals при пересчёте Computed
+  /// выполняются в отдельной дочерней зоне). Без обхода дочерняя зона
+  /// разрешалась пусто → «корень не зарегистрирован».
   static T of<T>() {
-    final target = _active().lookup<T>();
+    final target = _lookupIn<T>(Zone.current);
     if (target != null) return target;
     throw StateError(
       'StoreRootScope: корень типа $T не зарегистрирован. '
@@ -63,6 +76,21 @@ class StoreRootScope {
       return _testByZone[Zone.current] ??= _Registry();
     }
     return _appRegistry;
+  }
+
+  /// Обходит цепочку зон от [start] вверх до корня и возвращает первый
+  /// найденный корень типа [T]. Вне тестов (единый `_appRegistry`) обход
+  /// не нужен — `_lookupIn` сразу читает глобальный реестр.
+  static T? _lookupIn<T>(Zone start) {
+    if (!_isTest) return _appRegistry.lookup<T>();
+    var zone = start;
+    while (true) {
+      final hit = _testByZone[zone]?.lookup<T>();
+      if (hit != null) return hit;
+      final parent = zone.parent;
+      if (parent == null || identical(parent, zone)) return null;
+      zone = parent;
+    }
   }
 }
 
