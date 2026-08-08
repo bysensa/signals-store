@@ -58,50 +58,101 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     'package:signals_store_annotation/src/annotations.dart#Store',
   );
 
+  static const _derivedChecker = TypeChecker.fromUrl(
+    'package:signals_store_annotation/src/annotations.dart#DerivedStore',
+  );
+
   @override
   Future<String> generate(LibraryReader library, BuildStep buildStep) async {
-    // Карта: имя impl-класса → имя его @Store-реализации.
+    // Карта: имя impl-класса → имя его реализации (и @Store, и @DerivedStore).
     //
     // Нужна для корректной типизации concrete-полей, ссылающихся на суперкласс
     // другого стора (`final SessionStoreImpl session;`). Тогда генератор должен
     // использовать имя КОНКРЕТНОЙ реализации (`SessionStore`), чтобы подстор
     // был полноценно типизирован своими реактивными полями.
     final implToStoreName = <String, String>{};
+    // impl-имена классов с @Store(root: true) — валидные цели root-геттера
+    // @DerivedStore. Заполняется в первом проходе, используется во втором.
+    final rootImplNames = <String>{};
     for (final element in library.allElements) {
       if (element is! ClassElement) continue;
-      final annotations = _storeChecker.annotationsOf(element);
-      if (annotations.isEmpty) continue;
-      implToStoreName[element.name!] =
-          ConstantReader(annotations.first).read('name').stringValue;
+      final storeAnn = _storeChecker.firstAnnotationOf(element);
+      if (storeAnn != null) {
+        final reader = ConstantReader(storeAnn);
+        implToStoreName[element.name!] = reader.read('name').stringValue;
+        if (reader.peek('root')?.boolValue ?? false) {
+          rootImplNames.add(element.name!);
+        }
+      }
+      final derivedAnn = _derivedChecker.firstAnnotationOf(element);
+      if (derivedAnn != null) {
+        implToStoreName[element.name!] =
+            ConstantReader(derivedAnn).read('name').stringValue;
+      }
     }
-    // implToStoreName.keys — имена классов, помеченных @Store. Передаём в
-    // детектор реактивности как `storeImplNames`: concrete-поле, типизированное
-    // таким impl-классом, реактивно как подстор.
+    // implToStoreName.keys — имена классов, помеченных @Store/@DerivedStore.
+    // Передаём в детектор реактивности как `storeImplNames`: concrete-поле,
+    // типизированное таким impl-классом, реактивно как подстор.
     final storeImplNames = implToStoreName.keys.toSet();
 
     final values = <String>[];
     for (final element in library.allElements) {
-      final annotations = _storeChecker.annotationsOf(element);
-      if (annotations.isEmpty) continue;
-      // На одном классе допускается ровно одна аннотация `@Store` — несколько
-      // реализаций на одном описании запрещены (неоднозначность super-полей и
-      // single-responsibility).
-      if (annotations.length > 1) {
+      // Аннотации проверяем ДО фильтра ClassElement: @Store/@DerivedStore на
+      // не-классе (top-level const, typedef, ...) → понятная ошибка, а не
+      // молчаливый пропуск.
+      final storeAnns = _storeChecker.annotationsOf(element);
+      final derivedAnns = _derivedChecker.annotationsOf(element);
+      if (storeAnns.isEmpty && derivedAnns.isEmpty) continue;
+
+      if (element is! ClassElement) {
         final name = element.name;
+        final kind = element.kind.displayName;
+        final ann = storeAnns.isNotEmpty ? '@Store' : '@DerivedStore';
         throw InvalidGenerationSource(
-          'Class "$name" is annotated with multiple @Store annotations '
-          '(${annotations.length}). Only one @Store annotation is allowed per '
-          'class. Move each implementation into its own class.',
+          '$ann can only be applied to classes, but was found on $kind '
+          '"$name".',
           element: element,
         );
       }
-      final generated = await _generateForAnnotation(
-        element,
-        ConstantReader(annotations.single),
-        implToStoreName,
-        storeImplNames,
-      );
-      if (generated != null) values.add(generated);
+
+      // На одном классе допускается ровно одна аннотация — @Store ИЛИ
+      // @DerivedStore. Несколько @Store, либо @Store+@DerivedStore вместе —
+      // неоднозначность super-полей и single-responsibility.
+      if (storeAnns.isNotEmpty && derivedAnns.isNotEmpty) {
+        throw InvalidGenerationSource(
+          'Class "${element.name}" is annotated with both @Store and '
+          '@DerivedStore. Use exactly one annotation per class.',
+          element: element,
+        );
+      }
+      if (storeAnns.length > 1) {
+        throw InvalidGenerationSource(
+          'Class "${element.name}" is annotated with multiple @Store '
+          'annotations (${storeAnns.length}). Only one @Store annotation is '
+          'allowed per class. Move each implementation into its own class.',
+          element: element,
+        );
+      }
+
+      if (storeAnns.isNotEmpty) {
+        final generated = await _generateForAnnotation(
+          element,
+          ConstantReader(storeAnns.single),
+          implToStoreName,
+          storeImplNames,
+          rootImplNames,
+        );
+        if (generated != null) values.add(generated);
+      } else {
+        final generated = await _generateDerived(
+          element,
+          ConstantReader(derivedAnns.single),
+          implToStoreName,
+          storeImplNames,
+          rootImplNames,
+        );
+        if (generated != null) values.add(generated);
+      }
     }
     return values.isEmpty ? '' : values.join('\n\n');
   }
@@ -111,6 +162,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     ConstantReader annotation,
     Map<String, String> implToStoreName,
     Set<String> storeImplNames,
+    Set<String> rootImplNames,
   ) async {
     final storeName = annotation.read('name').stringValue;
     final isAbstract = annotation.peek('abstract')?.boolValue ?? false;
@@ -122,22 +174,106 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
       isRoot,
       implToStoreName,
       storeImplNames,
-      const <String>{},
+      rootImplNames,
       isDerived: false,
+    );
+  }
+
+  /// Обрабатывает `@DerivedStore` — производный стор с доступом к корню.
+  ///
+  /// Валидирует контракт derived-стора (ровно один abstract root-геттер,
+  /// типизированный `@Store(root: true)` impl'ом; поле-корень → ошибка), затем
+  /// делегирует эмиссию общего тела в [_emitStoreClass] с `isDerived: true`,
+  /// передавая имя члена-корня и его тип для эмиссии root-геттера.
+  Future<String?> _generateDerived(
+    Element element,
+    ConstantReader annotation,
+    Map<String, String> implToStoreName,
+    Set<String> storeImplNames,
+    Set<String> rootImplNames,
+  ) async {
+    // element гарантированно ClassElement — не-классы отброшены в generate()
+    // с понятной ошибкой «can only be applied to classes».
+    final clazz = element as ClassElement;
+    if (!clazz.isAbstract) {
+      throw InvalidGenerationSource(
+        '@DerivedStore class "${element.name}" must be abstract.',
+        element: element,
+      );
+    }
+
+    // Поиск root-геттера: abstract-геттер экземпляра, тип ∈ rootImplNames.
+    // Геттер — единственная допустимая форма объявления root (поле → ошибка
+    // ниже): геттер резолвится при каждом обращении, derived видит актуальный
+    // корень после пересоздания (см. спеку «Пересоздание корня»).
+    final rootGetters = element.getters
+        .where((g) => g.isAbstract && !g.isStatic && g.isOriginDeclaration)
+        .toList();
+    final rootTypedGetters = rootGetters.where((g) {
+      final t = g.returnType;
+      final el = t is InterfaceType ? t.element : null;
+      return el != null && rootImplNames.contains(el.name);
+    }).toList();
+    if (rootTypedGetters.isEmpty) {
+      throw InvalidGenerationSource(
+        'Derived store "${element.name}" must declare exactly one abstract '
+        'getter typed by a @Store(root: true) impl (e.g. '
+        '"AppStoreImpl get root;" in an abstract class). Found '
+        '${rootGetters.length} abstract getter(s), none typed by a root store.',
+        element: element,
+      );
+    }
+    if (rootTypedGetters.length > 1) {
+      throw InvalidGenerationSource(
+        'Derived store "${element.name}" declares multiple root-typed getters '
+        '(${rootTypedGetters.map((g) => g.name).join(', ')}). Only one is '
+        'allowed.',
+        element: element,
+      );
+    }
+    final rootMember = rootTypedGetters.single;
+    final rootTypeStr = rootMember.returnType.getDisplayString();
+
+    // Поле (не геттер), типизированное корневым impl → ясная ошибка.
+    // Root обязан быть abstract-геттером: поле сегодня = Signal-поле стора,
+    // а root — стабильная ссылка, резолвимая через StoreRootScope.
+    for (final f in _allFields(element)) {
+      final el = f.type is InterfaceType ? (f.type as InterfaceType).element : null;
+      if (el != null && rootImplNames.contains(el.name)) {
+        throw InvalidGenerationSource(
+          'Field "${f.name}" in derived store "${element.name}" is typed by a '
+          'root store. Declare root access as an abstract getter instead: '
+          '"$rootTypeStr get root;" (no body, in the abstract class).', element: f,
+        );
+      }
+    }
+
+    final storeName = annotation.read('name').stringValue;
+    return _emitStoreClass(
+      element,
+      storeName,
+      /*isAbstract=*/ false,
+      /*isRoot=*/ false,
+      implToStoreName,
+      storeImplNames,
+      rootImplNames,
+      isDerived: true,
+      rootMemberName: rootMember.name!,
+      rootTypeStr: rootTypeStr,
     );
   }
 
   /// Эмитит тело класса-стора (поля/геттеры/конструктор/коллизии/dispose).
   ///
-  /// Общий эмиссор для `@Store` и (в Task 6) `@DerivedStore`: всё, что не зависит
-  /// от типа аннотации, живёт здесь. На данном этапе `isDerived` всегда `false`,
-  /// а `rootMemberName`/`rootTypeStr`/`rootImplNames` не используются — их
-  /// наполнит Task 6 для производных сторов.
+  /// Общий эмиссор для `@Store` и `@DerivedStore`: всё, что не зависит от типа
+  /// аннотации, живёт здесь. Производные-надстройки (root-геттер, имя root в
+  /// reactive-базе) включаются флагом [isDerived] и параметрами
+  /// [rootMemberName]/[rootTypeStr].
   ///
   /// [implToStoreName] / [storeImplNames] — карта impl→имя реализации и множество
   /// impl-имён (для типизации подсторов и реактивности). [rootImplNames] —
-  /// множество impl-имён корневых сторов (Task 6: производный стор типизирует
-  /// ссылку на корень по его impl-имени).
+  /// множество impl-имён корневых сторов (нужно только для валидации в
+  /// [_generateDerived], здесь транзитом).
   Future<String?> _emitStoreClass(
     Element element,
     String storeName,
@@ -147,11 +283,7 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     Set<String> storeImplNames,
     Set<String> rootImplNames, {
     bool isDerived = false,
-    // Reserved for Task 6 (@DerivedStore): имя члена-корня и его тип.
-    // ignore: unused_element_parameter
     String? rootMemberName,
-    // Reserved for Task 6 (@DerivedStore): имя члена-корня и его тип.
-    // ignore: unused_element_parameter
     String? rootTypeStr,
   }) async {
     // Store применим только к классам.
@@ -198,10 +330,14 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
 
     // Разделяем поля на реактивные (abstract) и pass-through (concrete).
     final allFields = _allFields(element);
-    if (allFields.isEmpty) {
+    // Computed-кандидаты считаются заранее — для derived-проверки пустоты:
+    // derived без полей валиден, если есть concrete-геттеры помимо root.
+    final concreteGetters = _concreteGetters(element);
+    if (allFields.isEmpty && (!isDerived || concreteGetters.isEmpty)) {
       throw InvalidGenerationSource(
-        'Class "${element.name}" annotated with @Store has no fields. There is '
-        'nothing to generate.',
+        'Class "${element.name}" annotated with @Store/@DerivedStore has no '
+        'fields${isDerived ? ' and no concrete getters' : ''}. There is nothing '
+        'to generate.',
         element: element,
       );
     }
@@ -397,21 +533,41 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     final computedFieldDecls = <String>[];
     final computedGetters = <String>[];
     final plainGetters = <String>[];
-    final concreteGetters = _concreteGetters(element);
+    // concreteGetters уже собран выше (нужен для проверки пустоты derived).
+    if (isDerived) {
+      // Страховка: abstract root-геттер сюда и так не попадает (он abstract),
+      // но если пользователь назвал concrete-геттер именем root — выкидываем,
+      // иначе genератор переопределил бы его как super-делегат.
+      concreteGetters.removeWhere((g) => g.name == rootMemberName);
+    }
     var reactiveNames = const <String>{};
+    // Имена concrete-геттеров, ставших Computed (для точечного диспоза в
+    // dispose — только реальные Computed-поля, без дублирования abstract-полей
+    // и без root-геттера, у которого нет Computed-поля).
+    final computedGetterNames = <String>{};
     if (concreteGetters.isNotEmpty) {
+      // Для derived: имя root-геттера — реактивное (его тип ∈ rootImplNames ⊂
+      // storeImplNames). Геттеры, читающие `root.*`, становятся computed.
+      // Передаём root в базу фикс-пойнта детектора — он не знает про геттеры,
+      // только про поля.
+      final extraReactive = isDerived ? {rootMemberName!} : const <String>{};
       reactiveNames = await computeReactiveGetters(
         clazz: element,
         storeImplNames: storeImplNames,
+        extraReactiveNames: extraReactive,
       );
+      // Имена concrete-геттеров, ставших Computed (для точечного диспоза в
+      // dispose — только реальные Computed-поля, без дублирования abstract-полей
+      // и без root-геттера, у которого нет Computed-поля).
       for (final g in concreteGetters) {
         final getterName = g.name!;
         final returnType = _typeStringFor(g.returnType, implToStoreName);
         final computedField = '$getterName\$';
         final rawGetter = '${getterName}Raw';
         if (reactiveNames.contains(getterName)) {
+          computedGetterNames.add(getterName);
           // Computed-поле создаётся через `late final`: `super.getterName`
-          // недоступно в initializer-list (Dart запрещает `super` там), а в
+          // недоступен в initializer-list (Dart запрещает `super` там), а в
           // ленивом инициализаторе `this`/`super` доступны.
           computedFieldDecls.add(
             '  late final Computed<$returnType> $computedField = computed('
@@ -489,8 +645,14 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     // `;` ставится только когда нет тела: после `{ ... }` точка с запятой
     // незаконна (function-body не terminating-ся `;`).
     final ctorBody = isRoot ? ' { StoreRootScope.register(this); }' : '';
+    // Параметры конструктора — именованные. При пустом списке эмитим `()`,
+    // а не `({})` (последнее — синтаксическая ошибка). Возникает для derived-
+    // сторов без собственных полей (только computed над root) и для @Store,
+    // чьи concrete-поля самодостаточны.
+    final paramsPart =
+        ctorParams.isEmpty ? '()' : '({${ctorParams.join(', ')}})';
     buffer
-      ..write('  $storeName({${ctorParams.join(', ')}})')
+      ..write('  $storeName$paramsPart')
       ..write(allInits.isEmpty
           ? (ctorBody.isEmpty ? ';' : ctorBody)
           : ' : ${allInits.join(', ')}${ctorBody.isEmpty ? ';' : ctorBody}')
@@ -506,6 +668,18 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     if (accessors.isNotEmpty) {
       buffer.writeln();
       buffer.writeln(accessors.join('\n'));
+    }
+
+    // Root-геттер для derived-стора: резолвит корень при каждом обращении
+    // через StoreRootScope.of<T>() — НЕ late final, поэтому свежесозданный
+    // derived всегда видит актуальный корень после пересоздания (см. спеку
+    // «Пересоздание корня»). of<T>() читает List/Expando (не сигналы), ложных
+    // зависимостей в computed не создаёт.
+    if (isDerived) {
+      buffer.writeln();
+      buffer.writeln('  @override');
+      buffer.writeln('  $rootTypeStr get $rootMemberName => '
+          'StoreRootScope.of<$rootTypeStr>();');
     }
 
     // Computed-поля (late final Computed<T> x$ = computed(...)).
@@ -540,7 +714,10 @@ class StoreGenerator extends GeneratorForAnnotation<Store> {
     for (final f in reactiveFields) {
       disposeBuffer.writeln('    ${f.name}\$.dispose();');
     }
-    for (final g in reactiveNames) {
+    // Диспозим только реальные Computed-геттеры (не весь reactiveNames, куда
+    // входят abstract-поля — они диспозятся выше — и для derived имя root,
+    // у которого нет Computed-поля). Раньше здесь был двойной диспоз полей.
+    for (final g in computedGetterNames) {
       disposeBuffer.writeln('    $g\$.dispose();');
     }
     if (isRoot) disposeBuffer.writeln('    StoreRootScope.unregister(this);');

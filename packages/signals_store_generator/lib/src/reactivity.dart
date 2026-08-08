@@ -219,16 +219,22 @@ const _reactiveTypeNames = <String>{'Signal', 'ReadonlySignal'};
 Future<Set<String>> computeReactiveGetters({
   required ClassElement clazz,
   required Set<String> storeImplNames,
+  Set<String> extraReactiveNames = const {},
 }) async {
   // 1. База реактивных имён.
   //    - abstract-поля (обёрнуты в Signal).
   //    - concrete-поля с реактивным типом: @Store impl-подстор, *Signal-коллекция
   //      (MapSignal, ListSignal, ...), или пользовательский класс с Signal
   //      внутри (каскад, см. isReactiveType).
+  //    - [extraReactiveNames] — дополнительные реактивные имена, не являющиеся
+  //      полями класса (для @DerivedStore: имя root-геттера; его тип ∈ rootImplNames
+  //      ⊂ storeImplNames, но геттеры в базу полей не входят). Геттеры, читающие
+  //      эти имена, становятся computed существующим фикс-пойнтом.
   //    Геттеры сюда добавит фикс-пойнт.
   final reactive = <String>{
     for (final f in _instanceFields(clazz))
       if (f.isAbstract || isReactiveType(f.type, storeImplNames)) f.name!,
+    ...extraReactiveNames,
   };
 
   final getters = _concreteGetters(clazz).toList();
