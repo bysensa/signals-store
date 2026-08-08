@@ -1,8 +1,8 @@
 // ignore_for_file: lines_longer_than_80_chars
 
+import 'package:flutter_test/flutter_test.dart';
 import 'package:signals/signals.dart';
 import 'package:signals_store/signals_store.dart';
-import 'package:test/test.dart';
 
 import 'package:signals_store_example/domain/enums.dart';
 import 'package:signals_store_example/domain/models.dart';
@@ -17,7 +17,7 @@ import 'package:signals_store_example/domain/stores.dart';
 void main() {
   tearDown(StoreRootScope.resetCurrentZone);
 
-  AppStore _newStore() => AppStore(
+  AppStore newStore() => AppStore(
         session: SessionStore(
           currentUser: null,
           isLoading: false,
@@ -43,7 +43,7 @@ void main() {
 
   group('TodosDerived (integration)', () {
     test('resolves root via StoreRootScope and computes from it', () {
-      final app = _newStore(); // авторегистрируется в test-окружение
+      final app = newStore(); // авторегистрируется в test-окружение
       final derived = TodosDerived();
 
       expect(derived.visibleTodos, isEmpty);
@@ -63,7 +63,7 @@ void main() {
     });
 
     test('dispose runs without throwing', () {
-      _newStore();
+      newStore();
       final derived = TodosDerived();
       expect(derived.dispose, returnsNormally);
     });
